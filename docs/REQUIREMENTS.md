@@ -38,7 +38,7 @@
 | ADR-008 | Hybrid Tenant 및 서비스별 별도 Application Tenant는 현재 도입하지 않는다. | 확정             |
 | ADR-009 | Papyrus 등 각 SaaS는 자신의 도메인 리소스 및 리소스 수준 권한 정책을 관리한다. | 확정된 책임 경계 |
 | ADR-010 | Frontend와 Backend를 하나의 리포지토리에서 개발하되 코드와 실행 단위는 구분한다. | 확정된 개발 방향 |
-| ADR-011 | Backend는 FastAPI, Clean Architecture, Ports & Adapters, FastAPI DI, Modular Monolith 원칙으로 설계한다. | 기존 설계 원칙   |
+| ADR-011 | Backend는 FastAPI와 FastAPI DI 기반의 Modular Monolith로 구성한다. 현재의 사용자 정의 패키지 구조인 `api`, `apps`, `core`, `db`, `settings`, `utils`에 따라 책임을 구분하고, `main.py`에서 앱을 생성·조립하며 `server.py`에서 서버를 실행한다. | 확정             |
 | ADR-012 | OTP 기반 MFA 인증을 지원하며, MFA 제공 여부는 테넌트별 설정으로 관리한다. | 확정             |
 | ADR-013 | 외부 OIDC 설정은 테넌트별로 독립 관리하며, OIDC 인증 시 대상 테넌트에 설정된 서비스만 이용한다. Local 인증은 기존과 동일하게 유지하며 로그인 후 소속 테넌트를 선택하여 접근할 수 있다. | 확정             |
 
@@ -436,41 +436,104 @@ erDiagram
 
 ## 10. 개발 아키텍처 및 리포지토리 구조
 
+### 10.1 현재 리포지토리 구조
+
+아래 구조는 현재 리포지토리의 디렉터리와 파일을 기준으로 한다. Backend는 `apps/api/passport/`에 Python 패키지를 직접 배치한다. Frontend 영역인 `apps/web/`는 현재 빈 디렉터리이며, React + TypeScript 관리 포털의 세부 구조는 구현 시 정한다.
+
 ```text
-passport/
+passport/                              # 리포지토리 루트
 ├── apps/
-│   ├── web/                         # React + TypeScript 관리 포털
-│   │   └── src/
-│   │       ├── app/                 # Router, Provider, Layout
-│   │       ├── pages/               # 화면
-│   │       ├── features/            # authentication/account/tenant/... 기능
-│   │       └── shared/              # API Client, Components, Utils
-│   └── api/                         # FastAPI
-│       ├── src/passport/
-│       │   ├── main.py
-│       │   ├── bootstrap/           # lifespan, dependencies, composition
-│       │   ├── domain/              # entities, rules, ports
-│       │   ├── application/         # use cases
-│       │   ├── infrastructure/      # persistence, OIDC, JWT, security adapters
-│       │   └── presentation/        # HTTP routers, schemas, middleware
-│       ├── tests/
-│       └── migrations/
+│   ├── web/                           # Frontend 영역, 현재 빈 디렉터리
+│   └── api/                           # Backend 프로젝트 루트
+│       ├── passport/                  # Python import 패키지
+│       │   ├── __init__.py
+│       │   ├── py.typed
+│       │   ├── main.py                # FastAPI 앱 팩터리 및 ASGI app
+│       │   ├── server.py              # 서버 실행 진입점
+│       │   ├── api/                    # HTTP 요청·응답 처리
+│       │   ├── apps/                   # 업무 기능 및 지원 컴포넌트
+│       │   │   ├── authentication/    # Local/OIDC/MFA, 세션·토큰
+│       │   │   ├── identity/          # 사용자·계정 생명주기
+│       │   │   ├── tenant/            # 전역 테넌트·멤버십
+│       │   │   ├── audit/             # 감사 기록
+│       │   │   ├── cache/             # 캐시 연동
+│       │   │   ├── notification/      # 알림 처리
+│       │   │   └── background_job/    # 백그라운드 작업 연동
+│       │   ├── core/                  # 공통 타입·예외·컨텍스트
+│       │   ├── db/
+│       │   │   └── models/            # SQLAlchemy ORM 모델
+│       │   ├── settings/              # 실행 환경 설정
+│       │   └── utils/                 # 범용 보조 함수
+│       ├── tests/                     # Backend 테스트
+│       ├── migrations/                # DB 마이그레이션
+│       ├── .python-version
+│       ├── pyproject.toml
+│       ├── uv.lock
+│       └── README.md
 ├── docs/
-├── infra/
+│   ├── ARCHITECTURE.md
+│   └── REQUIREMENTS.md
 ├── scripts/
+├── .gitignore
+├── LICENSE
 └── README.md
 ```
 
-**구현 원칙**
+**구현 상태:** 현재 `main.py`는 `create_app()`과 ASGI `app`을 제공하며, `server.py`는 Uvicorn 실행 함수를 제공한다. 나머지 Backend 디렉터리는 대부분 초기 패키지 상태이다. 위 주석과 아래 책임 정의는 각 패키지에 구현할 역할이며, 업무 기능·DB 연결·Lifespan·의존성 공급이 이미 구현되었다는 의미는 아니다. SaaS 이용 관계 관리 기능의 세부 패키지 배치는 구현 시 정하며, `ApplicationMembership` 도입 여부는 D-07에서 별도로 결정한다.
 
-1. Backend는 하나의 배포 가능한 Modular Monolith로 시작한다.
-2. `domain.ports`가 추상 인터페이스를 소유하고, `infrastructure.adapters`가 이를 구현한다.
-3. FastAPI `Depends()` 기반으로 Application Service를 주입한다. 전역 가변 Singleton에 의존하지 않는다.
-4. Stateless Provider 클라이언트/Adapter는 Lifespan에서 프로세스별로 생성·재사용한다. 테넌트별 OIDC 설정·자격 증명·검증 컨텍스트를 구분하며, 실행 중 설정 변경 반영 및 관련 캐시 무효화 정책은 D-06에서 결정한다. Request-scoped DB 세션은 요청마다 관리한다.
-5. Frontend와 Backend는 Git Repository를 공유하지만 코드 경계와 빌드는 분리한다.
-6. Browser는 원칙적으로 하나의 Origin 하에서 정적 Web과 `/api`를 이용하도록 Reverse Proxy를 둔다(권장 배포).
-7. FastAPI OpenAPI를 API 계약의 기준으로 활용하고, Frontend TypeScript Client 자동 생성은 권장한다.
-8. 데이터는 PostgreSQL을 초기 후보로 제안한다(선택은 별도 승인).
+### 10.2 패키지별 책임
+
+| 위치 | 책임 |
+| ---- | ---- |
+| `passport/main.py` | `create_app()`으로 FastAPI 앱을 생성하고 ASGI `app`을 노출한다. 라우터·미들웨어·예외 처리·Lifespan 등록과 구성 요소 조립의 시작점으로 사용한다. |
+| `passport/server.py` | `main()`에서 Uvicorn을 실행한다. 앱 구성은 `passport.main:app`을 사용한다. |
+| `passport/api/` | HTTP 라우터, 요청·응답 스키마, HTTP 오류 변환 및 요청에 필요한 FastAPI 의존성 연결을 담당한다. 업무 절차는 `apps`의 서비스에 위임한다. |
+| `passport/apps/` | 인증, 사용자·계정, 테넌트 등 업무 기능과 감사·캐시·알림·백그라운드 작업 컴포넌트를 관리한다. 업무 서비스는 HTTP API와 백그라운드 작업에서 재사용할 수 있도록 구성한다. |
+| `passport/core/` | 여러 기능에서 공유하는 타입·예외·인증 컨텍스트 등 공통 정의를 관리한다. 개별 업무 절차나 외부 연동을 모으는 위치로 사용하지 않는다. |
+| `passport/db/` | DB 연결·연결 풀·요청별 세션·트랜잭션 기반 구성을 관리한다. ORM 모델은 `db/models/`에 배치한다. |
+| `passport/settings/` | 환경변수와 실행 환경별 설정을 관리한다. 테넌트별 OIDC 설정 등 런타임 업무 데이터는 해당 업무 기능과 DB 모델에서 관리한다. |
+| `passport/utils/` | 특정 업무에 속하지 않는 작은 보조 함수를 관리한다. 인증·인가·테넌트 정책은 담당 업무 기능에 둔다. |
+| `tests/`, `migrations/` | 각각 Backend 테스트와 DB 스키마 변경 이력을 관리한다. |
+
+### 10.3 구현 원칙
+
+1. Backend는 하나의 배포 가능한 Modular Monolith로 시작하며, 기능과 컴포넌트를 위 패키지 구조로 구분한다.
+2. 주요 호출·의존 방향은 `api → apps → db/core`로 구성한다. `db`의 ORM 모델에서 업무 서비스를 호출하거나 `core`가 `api`·개별 업무 서비스에 역으로 의존하여 순환 관계를 만들지 않도록 한다.
+3. 요청용 FastAPI `Depends()` 연결은 `api`에서 시작하고, 세션 공급이나 서비스 구성 함수는 해당 책임을 가진 모듈에 둔다. 모든 의존성을 하나의 공통 디렉터리로 모으도록 강제하지 않는다. 전역 가변 Singleton에 의존하지 않는다.
+4. 앱 조립은 `main.py`에서 시작한다. Lifespan은 공유 자원의 시작·종료를 관리하도록 앱에 등록하며, 초기화·연결 코드가 커지면 별도 모듈로 분리할 수 있다. 별도 `bootstrap` 패키지는 현재 구조의 필수 요소가 아니다.
+5. OIDC 검증 클라이언트 등 Stateless 컴포넌트와 DB 연결 풀은 프로세스별 Lifespan에 맞춰 생성·재사용·정리한다. DB 세션은 요청별로 공급·정리한다. 테넌트별 OIDC 설정·자격 증명·검증 컨텍스트를 구분하며, 실행 중 설정 변경 반영 및 관련 캐시 무효화 정책은 D-06에서 결정한다.
+6. SQLAlchemy ORM 모델은 `db/models/`에서 관리한다. 비밀번호 변경 후 전체 로그인 종료와 같은 업무 절차는 해당 `apps` 서비스에서 처리하며, ORM 모델에서 알림 발송이나 백그라운드 작업 실행을 직접 호출하지 않는다.
+7. Frontend와 Backend는 Git Repository를 공유하지만 코드 경계와 빌드는 분리한다. Browser는 하나의 Origin 하에서 정적 Web과 `/api`를 이용하도록 Reverse Proxy를 두는 배포를 권장한다.
+8. FastAPI OpenAPI를 API 계약의 기준으로 활용하고, Frontend TypeScript Client 자동 생성은 권장한다.
+9. 현재 Backend 의존성에는 SQLAlchemy의 asyncio 지원과 PostgreSQL 드라이버인 psycopg가 등록되어 있다. 실제 DB 연결 설정·모델·마이그레이션은 후속 구현 대상이다.
+
+### 10.4 빌드 및 실행 구성
+
+| 항목 | 현재 설정 |
+| ---- | --------- |
+| Python | `>=3.15`; `.python-version`은 `3.15` |
+| 배포 프로젝트명 | `Passport-API` |
+| Python import 패키지 | `passport` |
+| 빌드 Backend | `uv_build` |
+| 패키지 탐색 | `[tool.uv.build-backend]`의 `module-name = "passport"`, `module-root = ""`로 Backend 프로젝트 루트의 `passport/`를 지정 |
+| CLI 진입점 | `[project.scripts]`의 `api = "passport.server:main"` |
+| ASGI 진입점 | `passport.main:app` |
+| 기본 로컬 실행 주소 | `http://127.0.0.1:8000` |
+
+설치와 실행은 `apps/api/`에서 수행한다.
+
+```sh
+uv sync --locked
+uv run api
+```
+
+개발 중 자동 재시작이 필요하면 같은 디렉터리에서 다음 명령을 사용한다.
+
+```sh
+uv run uvicorn passport.main:app --reload
+```
+
+소스 배포본과 wheel 빌드는 같은 디렉터리에서 `uv build`로 수행한다. 실행 후 API 문서는 `/docs`, OpenAPI 명세는 `/openapi.json`에서 확인한다.
 
 ## 11. 단계별 개발 범위 제안
 
