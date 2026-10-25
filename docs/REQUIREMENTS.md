@@ -1,0 +1,552 @@
+# Passport 개발 요구사항 정의서 (SRS 초안)
+
+- **문서 버전:** 0.1
+- **작성일:** 2026-10-25
+- **상태:** 초안 — 확정된 아키텍처 결정과 권장 구현 요구사항을 구분함
+- **대상:** Passport Frontend, Backend, Papyrus 등 연동 SaaS
+- **범위:** 기능, 데이터, 보안, SaaS 연동, 사용자 화면, 비기능, 검증 기준
+
+## 1. 문서 목적과 요구사항 관리 기준
+
+이 문서는 Passport 개발의 기준선(Baseline)을 정의한다. Passport는 여러 기업용 SaaS가 공통으로 활용하는 **Authentication, Identity, Account & Global Tenant Management Service**이다. 구현을 시작하기 전에 확정된 요구사항과 추가 결정이 필요한 정책을 구분하여 무분별한 범위 확장을 방지한다.
+
+**결정 상태**
+
+- **확정:** 기존 논의에서 사용자가 명시적으로 결정한 사항.
+- **권장:** 현재까지의 결정에 부합하는 구현 제안이며 최종 승인 대상.
+- **미결:** 제품 정책 또는 프로토콜 계약을 먼저 결정해야 하는 사항.
+
+**우선순위**
+
+- **P0:** 최소 서비스(MVP) 운영에 필수.
+- **P1:** 초기 정식 운영 또는 기업 고객 확대 전에 필요.
+- **P2:** 장기 확장 기능.
+
+> 이 문서에서 `해야 한다`는 표현은 **해당 항목이 승인되었을 때의 구현·검증 기준**을 의미한다. `권장`과 `미결`을 사용자가 이미 확정한 것으로 간주하지 않는다.
+
+## 2. 확정된 제품 및 아키텍처 결정 (ADR 요약)
+
+| ID      | 결정                                                         | 상태             |
+| ------- | ------------------------------------------------------------ | ---------------- |
+| ADR-001 | 서비스 이름은 **Passport**이다.                              | 확정             |
+| ADR-002 | Passport는 인증뿐 아니라 개인정보, 계정, 전역 테넌트, 서비스 이용 관계를 관리한다. | 확정             |
+| ADR-003 | 인증은 **외부 OIDC Provider** 및 **자체 Local Authentication**을 지원한다. | 확정             |
+| ADR-004 | 외부 OIDC Provider의 토큰을 Passport 토큰으로 재발급·교환하지 않고 원본 발급자를 유지한다. | 확정             |
+| ADR-005 | Local Authentication을 통해 Passport 발급 **JWT Access Token**을 지원한다. | 확정             |
+| ADR-006 | Passport를 **OIDC Provider** 또는 **OAuth2 Authorization Server**로 정의하지 않는다. | 확정             |
+| ADR-007 | 모든 연동 SaaS는 Passport가 관리하는 하나의 **Global Tenant** 모델을 사용한다. | 확정             |
+| ADR-008 | Hybrid Tenant 및 서비스별 별도 Application Tenant는 현재 도입하지 않는다. | 확정             |
+| ADR-009 | Papyrus 등 각 SaaS는 자신의 도메인 리소스 및 리소스 수준 권한 정책을 관리한다. | 확정된 책임 경계 |
+| ADR-010 | Frontend와 Backend를 하나의 리포지토리에서 개발하되 코드와 실행 단위는 구분한다. | 확정된 개발 방향 |
+| ADR-011 | Backend는 FastAPI, Clean Architecture, Ports & Adapters, FastAPI DI, Modular Monolith 원칙으로 설계한다. | 기존 설계 원칙   |
+| ADR-012 | OTP 기반 MFA 인증을 지원하며, MFA 제공 여부는 테넌트별 설정으로 관리한다. | 확정             |
+| ADR-013 | 외부 OIDC 설정은 테넌트별로 독립 관리하며, OIDC 인증 시 대상 테넌트에 설정된 서비스만 이용한다. Local 인증은 기존과 동일하게 유지하며 로그인 후 소속 테넌트를 선택하여 접근할 수 있다. | 확정             |
+
+### 2.1 이번 범위에서 제외할 것
+
+- OAuth2 Authorization Server의 표준 인증/토큰 엔드포인트 전체 제공
+- OIDC Provider 기능 및 Discovery를 제공한다는 대외적 약속
+- 외부 토큰을 Passport JWT로 교환하는 토큰 브로커 기능
+- 서비스별 독립 테넌트 또는 Hybrid Tenant
+- Papyrus 문서·위키 공간·페이지의 직접 관리
+- 자체 구현한 범용 RBAC/ABAC 정책 엔진
+- Microservices로 분리된 Passport Backend
+
+> **토큰 용어 주의:** Local Authentication으로 발급하는 사용자 신원 정보용 JWT가 반드시 표준 OIDC `ID Token`인 것은 아니다. OIDC Provider가 아닌 현재 범위에서는 `Identity JWT` 등 별도 내부 명칭을 잠정 사용하고, 표준 ID Token 발급 여부는 별도 설계 결정이 필요하다.
+
+## 3. 시스템 경계와 주요 행위자
+
+### 3.1 주요 행위자
+
+| 행위자                        | 책임과 행동                                                  |
+| ----------------------------- | ------------------------------------------------------------ |
+| 일반 사용자(User)             | 회원가입, 로그인, 개인정보 확인·변경, 계정 탈퇴, 본인 소속 테넌트 조회 |
+| 테넌트 관리자(Tenant Admin)   | 허가된 테넌트의 정보, 멤버십 및 서비스 이용 관계 관리        |
+| 플랫폼 관리자(Platform Admin) | Passport 전체 애플리케이션 등록, 테넌트 운영 및 정책 설정    |
+| 외부 OIDC Provider            | 테넌트별 독립 설정에 따라 사용자를 인증하고 자신의 토큰을 발급·관리 |
+| Papyrus 및 기타 SaaS          | Passport 신원/테넌트/이용자 정보 참조, 자체 리소스와 권한 관리 |
+| Passport 관리 포털            | Passport API를 호출하는 Frontend                             |
+
+### 3.2 책임 경계
+
+| 영역                                        | Passport                             | Papyrus 등 SaaS                     |
+| ------------------------------------------- | ------------------------------------ | ----------------------------------- |
+| 외부 OIDC 신원 연결 및 Local Authentication | 소유                                 | Passport 또는 발급자 신뢰 정책 사용 |
+| 테넌트별 OIDC 설정 및 인증 허용 범위         | 테넌트별 독립 관리 및 인증 결과 검증   | 대상 테넌트의 허용된 인증 여부 검증 |
+| 사용자 개인정보·계정 상태                   | 소유                                 | 최소 정보만 참조·캐시               |
+| 전역 `tenant_id` 발급과 상태                | 소유                                 | 동일 식별자를 사용                  |
+| 사용자-테넌트 소속                          | 소유                                 | 검증 및 활용                        |
+| 테넌트-서비스 이용 관계                     | 소유                                 | 활성 여부 검증                      |
+| 서비스 이용자의 별도 접근 자격              | 중앙 관리가 필요하면 Passport (권장) | 도메인 권한과 구별하여 사용         |
+| 위키, 공간, 문서, 프로젝트                  | 소유하지 않음                        | 소유                                |
+| 문서별 읽기·편집 등 리소스 권한             | 소유하지 않음                        | 소유                                |
+
+```mermaid
+flowchart TB
+    WEB[Passport Web Portal] --> API[Passport API]
+    API --> AUTH[Authentication]
+    API --> ID[Identity & Account]
+    API --> TENANT[Global Tenant & Membership]
+    API --> APP[Application Access]
+    OIDC_A[Tenant A OIDC Service] -->|Tenant A configuration| AUTH
+    OIDC_B[Tenant B OIDC Service] -->|Tenant B configuration| AUTH
+    AUTH --> USER[(Passport User)]
+    ID --> USER
+    TENANT --> DB[(Passport DB)]
+    APP --> DB
+    PAP[Papyrus] -->|tenant / membership / entitlement| API
+    OTHER[Other SaaS] -->|tenant / membership / entitlement| API
+    PAP --> PRES[(Papyrus Resources)]
+    OTHER --> ORES[(Service Resources)]
+```
+
+## 4. 기능 요구사항
+
+### 4.1 Authentication: Local
+
+Local 인증은 테넌트별 OIDC 설정과 별개로 기존과 동일하게 제공한다. Local 인증을 완료한 사용자는 소속 테넌트를 선택하여 접근할 수 있으며, 계정 상태·테넌트 상태·현재 멤버십·MFA·서비스 이용 자격 검증을 모두 충족해야 한다.
+
+| ID          | 요구사항                                                     | 우선순위 | 상태 |
+| ----------- | ------------------------------------------------------------ | -------- | ---- |
+| FR-AUTH-001 | Local 계정은 안전하게 보관된 자격 증명으로 로그인할 수 있어야 한다. | P0       | 확정 |
+| FR-AUTH-002 | 인증 성공 시 Passport가 서명한 JWT Access Token을 발급할 수 있어야 한다. | P0       | 확정 |
+| FR-AUTH-003 | 사용자는 본인의 비밀번호를 변경할 수 있어야 한다.            | P0       | 확정 |
+| FR-AUTH-004 | 비밀번호 분실 시 검증된 복구 수단을 이용한 재설정 절차를 제공한다. | P1       | 확정 |
+| FR-AUTH-005 | 탈퇴·차단·비활성 상태의 계정은 신규 로그인 및 허가되지 않은 작업이 거부되어야 한다. | P0       | 확정 |
+| FR-AUTH-006 | 로그인 실패 횟수 제한, 속도 제한 및 계정 열거 방지 메시지를 적용한다. | P0       | 확정 |
+| FR-AUTH-007 | 비밀번호는 평문·복호화 가능한 형태가 아닌 적응형 해시(예: Argon2id)로 저장한다. | P0       | 확정 |
+| FR-AUTH-008 | Access Token의 수명, 키 식별자, 검증 규칙, 키 교체 절차를 정의한다. | P0       | 확정 |
+| FR-AUTH-009-01 | Access Token이 만료되어도 로그인 유지 조건을 충족하면 사용자에게 자격 증명 재입력을 요구하지 않고 새 Access Token을 발급해야 한다. | P0       | 확정 |
+| FR-AUTH-009-02 | 웹 관리 포털의 로그인 유지는 서버 세션을 사용한다. 모바일 앱 등 API를 직접 호출하는 사용자 클라이언트는 지원 시 Refresh Token을 사용하여 Access Token을 갱신한다. | P0       | 확정 |
+| FR-AUTH-009-03 | 웹 서버 세션과 Refresh Token 기반 사용자 클라이언트의 최대 로그인 유지 시간 및 미사용 만료 시간은 각각 별도로 설정할 수 있어야 한다. | P0       | 확정 |
+| FR-AUTH-009-03-01 | 웹 관리 포털의 서버 세션은 로그인 시점부터 최대 8시간 동안 유지한다. 사용자 활동이나 자동 갱신으로 이 최대 유지 시간을 연장하지 않으며, 만료 후에는 재로그인을 요구한다. | P0       | 확정 |
+| FR-AUTH-009-03-02 | 웹 관리 포털의 서버 세션은 마지막 사용자 활동 이후 30분 동안 사용되지 않으면 만료되어야 한다. 최대 유지 시간 8시간 이내라도 미사용 만료 시 재로그인을 요구한다. | P0       | 확정 |
+| FR-AUTH-009-03-03 | 웹 관리 포털의 미사용 만료 시간을 초기화하는 활동은 사용자의 화면 이동·조회·저장 등 명시적인 동작으로 발생한 인증된 요청으로 한정한다. 백그라운드 자동 갱신·주기적 조회 요청은 사용자 활동으로 인정하지 않으며, 미사용 만료 시간을 초기화하지 않는다. | P0       | 확정 |
+| FR-AUTH-009-03-04 | Refresh Token 기반 사용자 클라이언트의 로그인 상태는 최초 로그인 시점부터 최대 7일 동안 유지한다. Refresh Token 갱신으로 이 최대 유지 시간을 연장하지 않으며, 만료 후에는 재로그인을 요구한다. | P0       | 확정 |
+| FR-AUTH-009-03-05 | Refresh Token 기반 사용자 클라이언트의 로그인 상태는 마지막 사용자 활동 이후 3일 동안 사용되지 않으면 만료되어야 한다. 최대 유지 시간 7일 이내라도 미사용 만료 시 Refresh Token을 통한 Access Token 갱신을 거부하고 재로그인을 요구한다. | P0       | 확정 |
+| FR-AUTH-009-03-06 | Refresh Token 기반 사용자 클라이언트의 미사용 만료 시간을 초기화하는 활동은 사용자 동작으로 발생한 인증된 요청으로 한정한다. 자동 토큰 갱신·백그라운드 동기화는 사용자 활동으로 인정하지 않으며, 미사용 만료 시간을 초기화하지 않는다. | P0       | 확정 |
+| FR-AUTH-009-04 | 기본 로그아웃은 현재 브라우저 세션 또는 앱의 로그인만 종료하고, 별도로 '모든 기기에서 로그아웃' 기능을 제공한다. 종료 대상에 연결된 Passport 관리 서버 세션 또는 Refresh Token을 폐기하여 해당 로그인 상태의 유지·갱신을 거부한다. | P0       | 확정 |
+| FR-AUTH-009-05 | 비밀번호 직접 변경·분실 후 재설정·계정 차단·비활성화 시 모든 Passport 관리 로그인을 종료하고 서버 세션 및 Refresh Token을 폐기해야 한다. 세부 처리 정책은 하위 항목으로 관리하며, 이미 발급된 Access Token의 철회 정책은 FR-AUTH-009-06을 따른다. | P0       | 확정 |
+| FR-AUTH-009-05-01 | 로그인한 사용자가 비밀번호를 직접 변경하면 현재 로그인을 포함한 해당 사용자의 모든 Passport 관리 로그인을 종료하고, 연결된 서버 세션 및 Refresh Token을 폐기한다. 이후 새 비밀번호로 재로그인을 요구하며, 이미 발급된 Access Token의 철회 정책은 FR-AUTH-009-06을 따른다. | P0       | 확정 |
+| FR-AUTH-009-05-02 | 비밀번호 분실 후 재설정이 완료되면 해당 사용자의 모든 Passport 관리 로그인을 종료하고, 연결된 서버 세션 및 Refresh Token을 폐기한다. 이후 새 비밀번호로 로그인을 요구하며, 이미 발급된 Access Token의 철회 정책은 FR-AUTH-009-06을 따른다. | P0       | 확정 |
+| FR-AUTH-009-05-03 | 계정을 차단하거나 비활성화하면 해당 사용자의 모든 Passport 관리 로그인을 종료하고, 연결된 서버 세션 및 Refresh Token을 폐기한다. 계정 재활성화 시 기존 로그인 상태를 복원하지 않으며 재로그인을 요구한다. 이미 발급된 Access Token의 철회 정책은 FR-AUTH-009-06을 따르며, 차단·비활성 상태의 접근 거부 원칙(FR-AUTH-005)은 유지한다. | P0       | 확정 |
+| FR-AUTH-009-06 | 일반 로그아웃 및 비밀번호 변경·재설정·계정 차단·비활성화·Refresh Token 재사용 탐지에 따른 강제 종료 시, 하위 항목과 FR-AUTH-009-07-01의 종료 범위에 해당하는 Passport 발급 Access Token을 즉시 철회하고 후속 API 요청을 거부해야 한다. | P0       | 확정 |
+| FR-AUTH-009-06-01 | 일반 로그아웃 시 종료 대상 로그인에 연결된 Passport 발급 Access Token을 만료 전이라도 즉시 철회하고, 해당 토큰을 사용하는 후속 API 요청을 거부해야 한다. 현재 로그인 로그아웃은 해당 로그인에, '모든 기기에서 로그아웃'은 해당 사용자의 모든 Passport 관리 로그인에 적용한다. | P0       | 확정 |
+| FR-AUTH-009-06-02 | 비밀번호 직접 변경·분실 후 재설정·계정 차단·비활성화 시 해당 사용자의 기존 Passport 발급 Access Token 전체를 즉시 철회하고, 해당 토큰을 사용하는 후속 API 요청을 거부해야 한다. | P0       | 확정 |
+| FR-AUTH-009-07 | Refresh Token으로 Access Token을 갱신할 때마다 새 Refresh Token을 발급하고 이전 Refresh Token을 무효화해야 한다. 무효화된 Refresh Token의 재사용을 탐지해야 하며, 토큰 교체로 최초 로그인부터 최대 7일이라는 유지 한도를 연장하거나 미사용 시간을 초기화하지 않는다. | P0       | 확정 |
+| FR-AUTH-009-07-01 | 무효화된 Refresh Token의 재사용을 탐지하면 해당 사용자의 모든 Passport 관리 로그인을 종료하고, 모든 서버 세션 및 Refresh Token을 폐기해야 한다. 해당 사용자의 기존 Passport 발급 Access Token 전체를 즉시 철회하고 후속 API 요청을 거부하며, 재로그인을 요구한다. | P0       | 확정 |
+| FR-AUTH-010 | 표준 OIDC ID Token과 혼동되지 않는 자체 신원 JWT의 목적·명칭·검증 규칙을 문서화한다. | P1       | 미결 |
+
+**FR-AUTH-009 세분화:** 기존 항목을 FR-AUTH-009-01~07로 구분하고, 시간·강제 종료·철회 정책의 세부 사항은 하위 항목으로 관리한다. 웹 서버 세션과 Refresh Token 기반 클라이언트의 유지 시간, 사용자 활동 기준, 로그아웃 범위, 비밀번호 변경·재설정·계정 차단·비활성화 시 처리, Passport 발급 Access Token 즉시 철회 및 Refresh Token 교체·재사용 탐지는 위 표와 같이 확정이다. 이 결정으로 모바일 앱 개발 범위를 추가하지 않는다. 무효화된 Refresh Token 재사용 탐지 시에도 모든 Passport 관리 로그인을 종료하고 서버 세션·Refresh Token 전체 폐기 및 기존 Passport 발급 Access Token 전체 즉시 철회를 적용한다. 쿠키·토큰 저장 등 보안 세부 정책 및 연동 SaaS의 철회 상태 검증·반영 계약은 미결이다.
+
+**검증 예:** 올바른 자격 증명으로 인증 성공, 잘못된 자격 증명으로 실패, 차단 계정 접근 거부, 비밀번호 변경 이후 기존 인증 수단의 처리 정책 확인, 만료·변조된 JWT 거부.
+
+### 4.2 Authentication: External OIDC
+
+| ID          | 요구사항                                                     | 우선순위 | 상태 |
+| ----------- | ------------------------------------------------------------ | -------- | ---- |
+| FR-OIDC-001 | 각 테넌트가 독립적으로 보유한 OIDC 설정에 따라 외부 OIDC Provider와 인증 연동을 지원한다. 플랫폼 공통 Provider를 모든 테넌트의 기본 인증 수단으로 간주하지 않는다. | P0       | 확정 |
+| FR-OIDC-002 | 외부 토큰의 발급자와 원본 토큰은 유지하며 Passport 자체 JWT로 바꾸지 않는다. | P0       | 확정 |
+| FR-OIDC-003 | 로그인 시작 시 선택한 테넌트의 OIDC 설정을 기준으로 인증 결과의 발급자, 서명, 만료, 대상자, 상태/nonce 등 흐름별 필수 검증을 실시한다. ID Token의 대상자는 해당 설정의 client_id를 기준으로, API Access Token의 대상자는 호출 API의 계약을 기준으로 검증한다. | P0       | 확정 |
+| FR-OIDC-004 | 외부 사용자 식별은 이메일 단독이 아니라 `(issuer, subject)` 조합으로 수행한다. | P0       | 확정 |
+| FR-OIDC-005 | 동일 이메일이라는 이유로 기존 Passport 계정과 외부 계정을 자동 연결하지 않는다. 명시적 계정 연결 정책을 사용한다. | P0       | 확정 |
+| FR-OIDC-006 | Provider 설정 오류, 키 교체, 인증 취소, 통신 장애에 대한 실패 처리를 제공한다. | P0       | 확정 |
+| FR-OIDC-007 | 브라우저 로그인에 OIDC Authorization Code Flow를 채택한다면 `state`, `nonce` 및 PKCE 등 필요한 방어를 적용한다. | P0       | 확정 |
+| FR-OIDC-008 | 대상 테넌트에 설정되지 않았거나 비활성인 Provider의 인증 결과와 API 대상이 아닌 외부 Access Token을 거부한다. 다른 테넌트에서 승인된 Provider라도 대상 테넌트의 신뢰 대상으로 자동 인정하지 않는다. | P0       | 확정 |
+| FR-OIDC-009 | 외부 토큰의 형태(JWT/opaque)와 검증 방식은 Provider별 지원 계약에 명시한다. | P0       | 미결 |
+| FR-OIDC-010 | 테넌트별 OIDC 설정에 issuer, client_id, 필요한 자격 증명 참조 및 활성 상태를 독립적으로 관리한다. OIDC 인증에서는 대상 테넌트의 설정만 사용한다. | P0       | 확정 |
+| FR-OIDC-011 | 외부 OIDC 로그인 시작 전에 대상 테넌트를 식별하고 해당 테넌트의 OIDC 설정으로 인증을 시작한다. 테넌트 식별 UI·URL 등 구체적인 진입 방식은 별도 결정한다. | P0       | 확정 |
+| FR-OIDC-012 | OIDC 로그인 트랜잭션을 시작한 tenant_id와 OIDC 설정에 인증 요청 및 Callback 검증을 연결한다. Callback 경로·파라미터의 테넌트 또는 설정 변조와 다른 로그인 트랜잭션의 인증 응답 재사용을 거부한다. | P0       | 확정 |
+| FR-OIDC-013 | OIDC 인증 결과는 검증한 대상 테넌트의 인증 근거로만 사용한다. 복수 테넌트에 소속된 동일 User라도 다른 테넌트로 전환할 때 유효한 Local 인증 또는 대상 테넌트의 유효한 OIDC 인증 결과가 필요하다. 기존 OIDC 로그인을 Local 인증으로 간주하지 않는다. | P0       | 확정 |
+| FR-OIDC-014 | OIDC 설정이 없거나 비활성·오류 상태이면 해당 OIDC 인증을 거부하며, 플랫폼 공통 또는 다른 테넌트의 Provider로 자동 대체하지 않는다. 독립적인 Local 로그인과 이후 테넌트 선택은 기존 요구사항에 따라 허용한다. | P0       | 확정 |
+
+**인증 컨텍스트:** Passport와 SaaS는 인증 방식(Local/OIDC)과, OIDC인 경우 검증된 테넌트·OIDC 설정의 연관성을 신뢰할 수 있는 계약으로 확인해야 한다. 외부 토큰에 Passport의 tenant_id가 포함된다고 가정하지 않으며, 동일 User·동일 이메일·다른 테넌트 멤버십만으로 OIDC 인증 결과의 적용 범위를 확장하지 않는다. 전역 User와 `(issuer, subject)` 기반 신원 식별은 유지하되, 신원 연결과 대상 테넌트의 인증 요건 충족을 구분한다.
+
+**중요:** 외부 OIDC의 **ID Token**은 인증 결과를 Relying Party에 전달하기 위한 토큰이다. Papyrus 등 리소스 API에서 `Bearer`로 사용할 수 있는 Access Token과 동일하지 않다. 외부 Access Token이 Papyrus에 적합한 `aud`를 갖지 않는다면 원본 그대로 사용하더라도 Papyrus API 인증에는 사용할 수 없다. 이 상황의 서비스 로그인/SSO 설계는 **미결 정책**이다.
+
+### 4.3 Identity & Account
+
+| ID          | 요구사항                                                     | 우선순위 | 상태             |
+| ----------- | ------------------------------------------------------------ | -------- | ---------------- |
+| FR-USER-001 | Passport 전체에서 유일하고 불변인 `user_id`를 부여한다.      | P0       | 확정             |
+| FR-USER-002 | 사용자 기본 프로필과 승인된 개인정보 항목을 저장·수정·조회한다. | P0       | 확정             |
+| FR-USER-003 | 회원가입 및 사용자 계정 생성 기능을 제공한다.                | P0       | 확정             |
+| FR-USER-004 | 사용자 계정 상태(`PENDING`, `ACTIVE`, `SUSPENDED`, `DEACTIVATED`, `DELETED` 등)를 관리한다. 실제 상태 집합은 별도 승인한다. | P0       | 확정             |
+| FR-USER-005 | 회원 탈퇴를 요청·처리하되, 멤버십·서비스 이용 자격의 종료와 개인정보 삭제/보존 정책을 구분한다. | P0       | 확정             |
+| FR-USER-006 | Local 신원과 복수의 외부 신원을 동일 `User`에 연결할 수 있는 모델을 제공한다. | P1       | 확정             |
+| FR-USER-007 | 인증 수단 정보와 개인정보 모델을 분리하여 인증 Provider 변경에 따른 계정 중복을 방지한다. | P0       | 확정             |
+| FR-USER-008 | 사용자 본인의 개인정보 열람, 수정 및 삭제·반출 요청의 처리 경로를 제공한다. | P1       | 확정             |
+
+**PII 최소화:** 개인정보 필드, 필수 여부, 수집 목적, 보존 기간, 제3자 제공 범위, 관리자 열람 권한은 별도 개인정보 처리 명세에서 승인한다. 패스워드, 외부 Access Token, 민감 개인정보는 로그에 기록하지 않는다.
+
+### 4.4 Global Tenant
+
+| ID         | 요구사항                                                     | 우선순위 | 상태             |
+| ---------- | ------------------------------------------------------------ | -------- | ---------------- |
+| FR-TEN-001 | Passport만 전역 테넌트를 생성·조회·수정·상태 변경하는 권위 있는 원천(Source of Truth)이다. | P0       | 확정             |
+| FR-TEN-002 | 하나의 `tenant_id`를 모든 SaaS에서 동일하게 사용한다.        | P0       | 확정             |
+| FR-TEN-003 | 테넌트별 명칭, 식별자, 상태, 기본 메타데이터를 관리한다.     | P0       | 확정             |
+| FR-TEN-004 | 테넌트 활성/비활성 상태는 소속 사용자 및 서비스의 접근 판단에 반영되어야 한다. | P0       | 확정             |
+| FR-TEN-005 | 서비스별 독립 테넌트나 `ApplicationTenant`를 생성하지 않는다. | P0       | 확정             |
+| FR-TEN-006 | 연구소/영업본부 등 서비스 내부 공간은 서비스 도메인에서 `Workspace`/`Space` 등으로 관리한다. | P0       | 확정             |
+| FR-TEN-007 | 테넌트 탈퇴·폐쇄 시 연동 SaaS의 데이터 처리 절차와 상태 전파를 정의한다. | P1       | 확정             |
+| FR-TEN-008 | 테넌트별 설정으로 OTP 기반 MFA 인증의 활성/비활성 여부를 관리할 수 있어야 한다. | 미결     | 확정             |
+| FR-TEN-009 | 각 테넌트는 자신의 OIDC 설정을 독립적으로 보유하며, 권한 있는 관리자는 허용된 테넌트 범위에서만 설정을 등록·조회·변경·활성화·비활성화할 수 있어야 한다. 자격 증명의 비밀 관리와 변경 감사에는 9장의 보안 요구사항을 적용한다. | P0       | 확정             |
+
+### 4.5 Tenant Membership
+
+| ID         | 요구사항                                                     | 우선순위 | 상태 |
+| ---------- | ------------------------------------------------------------ | -------- | ---- |
+| FR-MEM-001 | 사용자와 테넌트의 다대다 소속 관계를 저장한다.               | P0       | 확정 |
+| FR-MEM-002 | 하나의 사용자는 여러 테넌트에 소속될 수 있다.                | P0       | 확정 |
+| FR-MEM-003 | 테넌트 관리자는 권한 범위 내에서 멤버를 추가·조회·상태 변경·제거할 수 있다. | P0       | 확정 |
+| FR-MEM-004 | 최소한 테넌트 관리자와 일반 구성원 역할을 구별한다.          | P0       | 확정 |
+| FR-MEM-005 | 같은 사용자와 테넌트 간 중복 활성 멤버십이 생성되지 않도록 데이터 제약을 둔다. | P0       | 확정 |
+| FR-MEM-006 | 특정 사용자를 서비스에 초대하는 초대장·수락·만료 절차를 제공한다. | P1       | 확정 |
+| FR-MEM-007 | 테넌트 외부 협력자의 제한적 서비스 접근 모델을 별도 정책으로 정의한다. | P2       | 미결 |
+
+### 4.6 SaaS Application Registry & Access
+
+| ID         | 요구사항                                                     | 우선순위 | 상태             |
+| ---------- | ------------------------------------------------------------ | -------- | ---------------- |
+| FR-APP-001 | Passport와 연동할 SaaS를 `Application`으로 등록·조회·상태 관리한다. | P0       | 확정             |
+| FR-APP-002 | `TenantApplication`을 통해 테넌트별 서비스 활성/비활성·이용 관계를 기록한다. | P0       | 확정             |
+| FR-APP-003 | Papyrus는 Passport `tenant_id`를 사용하고 자체 테넌트 ID를 별도 발행하지 않는다. | P0       | 확정             |
+| FR-APP-004 | SaaS는 사용자의 인증뿐 아니라 대상 테넌트에서 허용된 인증 방식·OIDC 설정, 테넌트 소속·서비스 이용 자격을 확인해야 한다. Local 인증은 테넌트 선택 후 접근할 수 있으며, 외부 OIDC 인증은 대상 테넌트의 설정에 부합해야 한다. | P0       | 확정             |
+| FR-APP-005 | 사용자별 서비스 이용 자격이 필요한 경우 `ApplicationMembership`을 추가하되 전역 테넌트 모델은 변경하지 않는다. | P1       | 권장             |
+| FR-APP-006 | SaaS 서비스별 리소스 권한(위키·문서·페이지 등)은 SaaS가 관리한다. | P0       | 확정된 책임 경계 |
+| FR-APP-007 | Passport와 SaaS 간 신뢰 가능한 서비스 간 호출 인증 및 최소 권한을 적용한다. | P0       | 확정             |
+| FR-APP-008 | 멤버십 취소, 테넌트 중지, 앱 계약 중단 등이 SaaS 접근에 반영되는 시점과 캐시 무효화 규칙을 명시한다. | P0       | 미결             |
+
+### 4.7 Passport 관리 포털 (Frontend)
+
+| ID         | 화면/기능                                                 | 우선순위 | 상태 |
+| ---------- | --------------------------------------------------------- | -------- | ---- |
+| FR-WEB-001 | Local 로그인 및 대상 테넌트 식별 후 해당 테넌트의 OIDC 서비스로 연결하는 외부 로그인 진입 화면 | P0       | 확정 |
+| FR-WEB-002 | 회원가입, 본인 프로필 조회·변경, 비밀번호 변경, 탈퇴 요청 | P0       | 확정 |
+| FR-WEB-003 | 사용자가 소속된 테넌트 목록 및 테넌트 선택 UI. Local 로그인 후 테넌트 선택을 지원하며, OIDC 사용자의 전환 시 대상 테넌트의 인증 요건을 확인한다. | P0       | 확정 |
+| FR-WEB-004 | 테넌트 관리자용 멤버 목록·추가·제거·역할 관리 UI          | P0       | 확정 |
+| FR-WEB-005 | 테넌트별 이용 가능한 SaaS 목록·활성 상태 조회 UI          | P0       | 확정 |
+| FR-WEB-006 | 플랫폼 관리자용 Tenant/Application 관리 화면              | P0       | 확정 |
+| FR-WEB-007 | 감사 이력 조회 및 운영 상태 화면                          | P1       | 확정 |
+| FR-WEB-008 | 권한 있는 관리자를 위한 테넌트별 MFA 설정 UI             | 미결     | 확정 |
+| FR-WEB-009 | 사용자 OTP 등록 및 MFA 인증 코드 입력 UI                 | 미결     | 확정 |
+| FR-WEB-010 | 권한 있는 관리자를 위한 테넌트별 OIDC 설정 관리 UI. 다른 테넌트의 설정과 비밀값을 노출하지 않는다. | P0       | 권장 |
+
+### 4.8 Authentication: OTP 기반 MFA
+
+| ID         | 요구사항                                                     | 우선순위 | 상태 |
+| ---------- | ------------------------------------------------------------ | -------- | ---- |
+| FR-MFA-001 | OTP를 추가 인증 수단으로 사용하는 MFA 인증을 제공해야 한다. | 미결     | 확정 |
+| FR-MFA-002 | MFA 인증의 제공 여부는 대상 테넌트의 설정에 따라 적용되어야 한다. | 미결     | 확정 |
+| FR-MFA-003 | MFA가 활성화된 테넌트에 접근할 때 해당 테넌트의 MFA 정책 충족 여부를 검증하고, 미충족 시 OTP 추가 인증을 요구한다. 복수 테넌트 소속 사용자의 테넌트 전환 시에도 대상 테넌트의 정책을 검증한다. | 미결     | 확정 |
+| FR-MFA-004 | OTP 등록·검증·해제 및 인증 수단 분실 시 복구 절차를 제공하며, 설정 변경에는 적절한 권한 확인과 감사 기록을 적용한다. | 미결     | 확정 |
+| FR-MFA-005 | OTP 검증에 유효기간, 재사용 방지 및 실패 시도 제한을 적용하고, OTP 원문과 인증용 비밀값을 로그에 기록하지 않는다. | 미결     | 확정 |
+
+**미결 정책:** OTP 방식, 테넌트 설정의 기본값·변경 권한, Local/외부 OIDC별 적용 방식, MFA 인증 결과의 유효기간·재사용 범위 및 개발 우선순위는 D-12에서 결정한다. 외부 OIDC에 MFA를 적용할 때도 원본 발급자를 유지하고 외부 토큰을 Passport 토큰으로 교환하지 않는 원칙은 유지한다.
+
+## 5. 인가(Authorization) 모델
+
+인가는 다음 순서의 **독립된 검사**로 정의한다.
+
+1. **인증 신뢰성:** 토큰·세션이 유효하며 Passport에 매핑된 사용자 신원인가?
+2. **테넌트 인증 요건:** 유효한 Local 인증인가, 또는 대상 테넌트의 OIDC 설정으로 검증된 유효한 인증인가?
+3. **계정 유효성:** 사용자 계정이 활성화되어 있는가?
+4. **테넌트 소속:** 요청한 `tenant_id`에 대한 현재 멤버십이 유효한가?
+5. **서비스 이용 계약:** 해당 `tenant_id`에서 대상 `Application`이 활성화되어 있는가?
+6. **서비스 접근 자격:** 별도의 사용자별 서비스 허가가 있다면 유효한가?
+7. **도메인 권한:** Papyrus가 요청 리소스에 대한 읽기/쓰기 등을 허용하는가?
+
+**MFA 적용 검증(권장):** MFA가 활성화된 테넌트는 서비스 접근을 허용하기 전에 해당 테넌트의 MFA 정책 충족 여부를 추가로 확인한다. 구체적인 인증 결과 전달·검증 계약은 D-12에서 결정한다.
+
+**보안 불변 조건**
+
+- 클라이언트의 `tenant_id`는 **선택자**일 뿐 권한 증명이 아니다. 서버가 항상 인증된 사용자와 현재 멤버십을 대조한다.
+- 외부 OIDC 인증에서 대상 테넌트와 검증된 OIDC 설정의 연관성을 확인한다. 다른 테넌트의 OIDC 인증 결과나 사용자 신원 연결만으로 대상 테넌트 접근을 허용하지 않는다. 유효한 Local 인증에 의한 테넌트 선택은 별도로 허용한다.
+- 모든 테넌트 범위 조회·수정은 `tenant_id` 범위 또는 동등한 강제 경계를 적용한다.
+- `user_id`와 `tenant_id`는 유일하고 임의 추측하기 어려운 식별자로 설계한다. 식별자 난수성만으로 인가를 대체하지 않는다.
+- 플랫폼 관리자 기능은 일반 테넌트 API와 분리하여 강한 인증, 최소 권한, 감사 기록을 적용한다.
+- JWT의 이전 멤버십 클레임만으로 철회되지 않은 권한을 영구 보장하지 않는다. 실시간 조회 또는 짧은 캐시/만료 정책을 정의한다.
+
+## 6. 주요 데이터 모델 (논리 ERD)
+
+| 엔터티                  | 주요 속성(예시)                                      | 핵심 제약                          |
+| ----------------------- | ---------------------------------------------------- | ---------------------------------- |
+| `User`                  | `id`, `status`, `created_at`                         | 전역 불변 ID                       |
+| `UserProfile`           | `user_id`, `display_name`, `email`, `phone`          | User 연관, PII 보호                |
+| `Identity`              | `user_id`, `provider_type`, `issuer`, `subject`      | 외부 신원 `(issuer, subject)` 유일 |
+| `Credential`            | `user_id`, `password_hash`, `updated_at`             | 안전한 해시, 접근 최소화           |
+| `Tenant`                | `id`, `name`, `status`                               | 전역 불변 ID                       |
+| `TenantOIDCConfiguration` | `id`, `tenant_id`, `issuer`, `client_id`, `credential_ref`, `status` | 테넌트별 독립 설정, 비밀값은 안전한 참조로 관리 |
+| `TenantMembership`      | `tenant_id`, `user_id`, `role`, `status`             | 중복 활성 소속 제한                |
+| `Application`           | `id`, `code`, `name`, `status`                       | 서비스 코드 고유                   |
+| `TenantApplication`     | `tenant_id`, `application_id`, `status`              | 테넌트-서비스 관계 고유            |
+| `ApplicationMembership` | `tenant_id`, `application_id`, `user_id`, `status`   | **P1 선택적 모델**, 도입 시 검증   |
+| `AuditEvent`            | `actor_id`, `tenant_id`, `action`, `target_id`, `at` | 변경 추적, PII 최소화              |
+
+```mermaid
+erDiagram
+    USER ||--o| USER_PROFILE : has
+    USER ||--o{ IDENTITY : authenticates_with
+    USER ||--o| CREDENTIAL : local_credentials
+    USER ||--o{ TENANT_MEMBERSHIP : belongs_to
+    TENANT ||--o{ TENANT_MEMBERSHIP : has
+    TENANT ||--o| TENANT_OIDC_CONFIGURATION : configures
+    TENANT ||--o{ TENANT_APPLICATION : subscribes
+    APPLICATION ||--o{ TENANT_APPLICATION : enabled_for
+    USER ||--o{ APPLICATION_MEMBERSHIP : optional_access
+    APPLICATION ||--o{ APPLICATION_MEMBERSHIP : optional_access
+    TENANT ||--o{ APPLICATION_MEMBERSHIP : optional_access
+```
+
+**모델링 주의:** `User`의 이메일과 외부 Provider 이메일은 신원 유일성을 판단하는 단독 키가 아니다. 하나의 User에 여러 인증 수단을 연결할 수 있다. `Organization`과 `Tenant`의 별도 분리는 현재 요구하지 않는다.
+
+**OIDC 설정 격리:** 테넌트별 OIDC 설정과 로그인 트랜잭션은 독립 관리한다. 설정이 없거나 비활성인 테넌트의 OIDC 로그인은 허용하지 않는다. 같은 OIDC 제품을 사용하더라도 설정과 검증 범위를 테넌트별로 구분하며, issuer 하나만으로 대상 테넌트의 인증 요건 충족을 판단하지 않는다. Local 인증 및 전역 User·테넌트 멤버십 모델은 유지한다.
+
+## 7. API 계약 초안 (예시이며 경로 확정 아님)
+
+| 기능                           | HTTP 메서드 및 경로(초안)                     | 호출 주체         |
+| ------------------------------ | --------------------------------------------- | ----------------- |
+| Local 로그인                   | `POST /api/v1/auth/local/login`               | 사용자            |
+| 테넌트별 외부 OIDC 시작        | `GET /api/v1/tenants/{tenantId}/auth/oidc/start` | 브라우저          |
+| 테넌트별 외부 OIDC Callback    | `GET /api/v1/tenants/{tenantId}/auth/oidc/callback` | 브라우저/Provider |
+| 테넌트 OIDC 설정 관리          | `GET/PUT /api/v1/tenants/{tenantId}/oidc-configuration` | 해당 권한자       |
+| 현재 사용자 조회               | `GET /api/v1/users/me`                        | 사용자            |
+| 현재 사용자 수정               | `PATCH /api/v1/users/me`                      | 사용자            |
+| 비밀번호 변경                  | `POST /api/v1/users/me/password`              | Local 사용자      |
+| 탈퇴 요청                      | `POST /api/v1/users/me/withdrawal`            | 사용자            |
+| 소속 테넌트 목록               | `GET /api/v1/users/me/tenants`                | 사용자            |
+| 테넌트 생성/목록               | `POST/GET /api/v1/tenants`                    | 승인된 관리자     |
+| 테넌트 조회/수정               | `GET/PATCH /api/v1/tenants/{tenantId}`        | 해당 권한자       |
+| 멤버십 관리                    | `GET/POST /api/v1/tenants/{tenantId}/members` | 해당 권한자       |
+| 테넌트 서비스 목록             | `GET /api/v1/tenants/{tenantId}/applications` | 해당 권한자       |
+| SaaS 앱 등록/조회              | `POST/GET /api/v1/applications`               | 플랫폼 관리자     |
+| SaaS 연동용 사용자/멤버십 검증 | **계약 설계 필요** (API/서버측 정책 조회)     | 인증된 SaaS       |
+
+- 외부 공개 API는 OpenAPI 계약으로 관리하며 하위 호환 정책을 정의한다.
+- Python 내부 속성명은 `snake_case`를 기본으로 하고, 외부 JSON 형식은 `camelCase`를 **권장**하되 승인 후 고정한다.
+- 목록 API는 페이징·검색·정렬 및 인가 필터를 제공한다.
+- 상태 변경 API는 동시성 제어, 감사 기록 및 재시도 시 중복 처리 방지를 고려한다.
+- OIDC Callback의 tenantId는 로그인 시작 시 서버가 바인딩한 테넌트·설정과 대조한다. 테넌트 경로만으로 인증 응답의 적용 대상을 신뢰하지 않으며, OIDC 설정 조회 응답에 자격 증명 비밀값을 포함하지 않는다.
+- 401(인증 실패), 403(인가 실패), 404(보호 대상 은닉 필요 시), 409(상태 충돌), 422(입력 오류) 등을 일관되게 사용한다.
+
+## 8. 핵심 사용 시나리오 및 인수 기준
+
+### SC-01 Local 가입 및 로그인
+
+1. 사용자가 Passport에 Local 계정 가입을 요청한다.
+2. Passport가 계정·자격 증명을 등록한다(이메일 확인 정책은 별도 결정).
+3. 사용자가 정상적인 자격 증명으로 로그인한다.
+4. Passport가 유효한 Local JWT Access Token을 발급한다.
+5. 사용자가 소속 테넌트를 선택하고, 계정·테넌트·멤버십·MFA·서비스 이용 자격 검증 후 접근한다.
+
+**인수 기준:** 잘못된 비밀번호 또는 비활성 사용자일 때 인증 실패. 비밀번호 원문 미저장. 발급 토큰의 만료·서명·발급자 검증 성공. Local 인증 사용자는 대상 테넌트의 OIDC 인증 없이 소속 테넌트를 선택할 수 있으나, 멤버십·MFA·서비스 이용 자격 검증을 우회할 수 없음.
+
+### SC-02 외부 OIDC 로그인
+
+1. 사용자가 대상 테넌트를 식별한다.
+2. Passport는 해당 테넌트의 활성 OIDC 설정으로 인증을 시작하고, 로그인 트랜잭션에 테넌트·설정을 연결한다.
+3. 사용자는 해당 테넌트의 OIDC 서비스에서 인증한다.
+4. Passport는 시작 시 연결한 테넌트·설정을 기준으로 응답과 흐름별 필수 클레임·토큰을 검증한다.
+5. `(issuer, subject)`를 기준으로 Passport User와 매핑하고, 해당 테넌트의 현재 멤버십·MFA·서비스 이용 자격을 검증한다.
+6. 외부 토큰을 Passport가 새로 발급한 Access Token으로 치환하지 않는다.
+
+**인수 기준:** 대상 테넌트에 설정되지 않은 발급자, 잘못된 서명·nonce·audience, 테넌트·설정·Callback 변조 및 계정 연결 충돌을 거부. 동일 이메일만으로 자동 병합하지 않음. OIDC 설정 누락·비활성·오류 시 다른 테넌트나 플랫폼 공통 Provider로 자동 대체하지 않음.
+
+### SC-03 전역 테넌트와 서비스 활성화
+
+1. 플랫폼 관리자가 `T-100` 테넌트를 등록한다.
+2. 사용자 `U-100`을 `T-100`에 소속시킨다.
+3. `T-100`에서 Papyrus 이용을 활성화한다.
+4. Papyrus는 `T-100`을 그대로 참조한다.
+
+**인수 기준:** Passport와 Papyrus의 `tenant_id`가 일치. 서비스 활성화 전에는 접근 불가. 별도 Application Tenant가 생성되지 않음.
+
+### SC-04 동일 사용자의 복수 테넌트 접근
+
+1. `U-100`이 `T-100`, `T-200` 모두에 소속된다.
+2. 사용자가 활성 테넌트를 선택한다.
+3. Local 인증 사용자는 유효한 Local 인증으로 테넌트를 선택할 수 있다. OIDC 인증 사용자는 대상 테넌트의 유효한 OIDC 인증 결과가 없으면 해당 테넌트의 OIDC 로그인 또는 별도의 Local 로그인이 필요하다.
+4. 각 요청에서 선택된 테넌트에 대한 인증 요건 및 현재 멤버십을 검증한다.
+
+**인수 기준:** 허가된 테넌트만 접근 가능. 단순 URL/헤더의 테넌트 ID 변경으로 권한 상승 불가. `T-100`의 OIDC 인증만으로 `T-200`에 접근할 수 없음. 동일 User에 외부 신원이 연결되어 있거나 양쪽 멤버십이 있더라도 이 조건을 우회할 수 없음. 유효한 Local 인증 사용자는 대상 테넌트의 멤버십 등 접근 조건 충족 시 두 테넌트를 선택하여 접근 가능.
+
+### SC-05 멤버십 해지와 SaaS 접근 차단
+
+1. 테넌트 관리자가 사용자의 멤버십을 해지한다.
+2. Passport의 멤버십이 비활성화된다.
+3. Papyrus의 후속 접근에 변경이 반영된다.
+
+**인수 기준:** 권한 변경 반영은 합의된 최대 전파/캐시 지연시간 안에 이루어져야 한다. 이 시간의 수치는 미결.
+
+### SC-06 계정 탈퇴
+
+1. 사용자가 탈퇴를 요청한다.
+2. 재인증 등 필요한 확인을 수행한다.
+3. 계정·인증 수단·멤버십의 효력이 종료된다.
+4. 개인정보는 승인된 보존·삭제 정책에 따라 처리한다.
+
+**인수 기준:** 탈퇴 이후 무단 재로그인 및 이전 소속으로의 접근 불가. 데이터 보존/삭제 조치가 추적 가능.
+
+### SC-07 테넌트별 OTP MFA 적용
+
+1. 권한 있는 관리자가 `T-100`의 MFA를 활성화하고 `T-200`의 MFA는 비활성화한다.
+2. 두 테넌트에 소속된 사용자가 Local 인증 또는 `T-100`에 설정된 OIDC 인증으로 `T-100`에 접근하면 OTP 추가 인증을 수행한다.
+3. 사용자가 테넌트를 전환하면 대상 테넌트의 MFA 설정과 인증 충족 여부를 확인한다.
+
+**인수 기준(권장):** `T-100`은 OTP 인증 완료 전 접근이 거부되고 유효한 OTP 인증 후 접근할 수 있다. 잘못되거나 만료·재사용된 OTP는 거부된다. `T-100`의 설정 변경은 `T-200`의 설정을 변경하지 않으며, `T-200`에서의 인증만으로 `T-100`의 MFA 검증을 우회할 수 없다.
+
+## 9. 비기능 및 보안 요구사항
+
+| ID            | 요구사항                                                     | 우선순위 | 상태           |
+| ------------- | ------------------------------------------------------------ | -------- | -------------- |
+| NFR-SEC-001   | 통신 전 구간 TLS, 자격 증명·키의 안전한 비밀 관리, 최소 권한 적용 | P0       | 확정           |
+| NFR-SEC-002   | JWT의 허용 알고리즘, `iss`, `aud`, `exp`, `nbf` 등 필요한 검증과 키 교체 대응 | P0       | 확정           |
+| NFR-SEC-003   | 브라우저 저장 전략을 정하고 쿠키 사용 시 `HttpOnly`, `Secure`, `SameSite`와 CSRF 방어 적용 | P0       | 확정           |
+| NFR-SEC-004   | Tenant ID 변조·IDOR·권한 상승·Cross-Tenant 데이터 접근을 거부 | P0       | 확정           |
+| NFR-SEC-005   | 비밀번호 해시는 Argon2id 등 검증된 적응형 알고리즘 사용      | P0       | 확정           |
+| NFR-SEC-006   | 개인정보 최소 수집, 권한별 노출 제한, 암호화 필요 필드 및 보존 기간 관리 | P0       | 확정           |
+| NFR-SEC-007   | 계정·테넌트·멤버십·서비스 접근의 보안 중요 변경을 AuditEvent로 기록 | P0       | 확정           |
+| NFR-SEC-008   | 운영 로그에 비밀번호, 토큰 원문, 민감 개인정보를 기록하지 않음 | P0       | 확정           |
+| NFR-OPS-001   | 구조화 로그, 요청 추적 ID, 에러 분류, 헬스 체크 및 메트릭 제공 | P0       | 확정           |
+| NFR-OPS-002   | DB 마이그레이션·백업·복원 절차와 장애 복구 연습 마련         | P0       | 확정           |
+| NFR-OPS-003   | 외부 Provider 연결에 연결/읽기 타임아웃·재시도 정책·장애 격리 적용 | P0       | 확정           |
+| NFR-OPS-004   | OIDC 검증 클라이언트 등 Stateless Adapter는 앱 기동 시 생성해 재사용; DB 세션 등은 요청 스코프 관리 | P0       | 확정           |
+| NFR-OPS-005   | Graceful shutdown과 종료 시 리소스 정리; 프로세스당 라이프사이클 분리 | P0       | 확정           |
+| NFR-PERF-001  | 로그인·토큰 검증·테넌트 목록·멤버십 조회의 p95 지연 및 목표 TPS를 명시하고 부하 테스트 | P1       | 확정           |
+| NFR-AVAIL-001 | 가용성 목표(SLO), RPO/RTO, 멤버십 변경 전파 최대 지연을 정량화 | P1       | 확정           |
+| NFR-TEST-001  | 단위·통합·E2E·보안 테스트를 CI에서 자동화                    | P0       | 확정           |
+
+**확정 범위:** 아래 필수 보안 테스트를 포함한 9장의 모든 요구사항을 확정한다. 브라우저 저장 전략의 구체적인 방식은 D-03에서, 성능·가용성·복구·변경 전파의 정량 목표는 D-11에서 별도로 결정한다. 요구사항 확정으로 아직 명시되지 않은 방식이나 수치가 확정된 것으로 간주하지 않는다.
+
+### 필수 보안 테스트 묶음 (확정)
+
+- 다른 테넌트의 리소스 ID를 직접 요청하는 IDOR 테스트
+- 다른 테넌트의 멤버를 추가·제거하려는 시도
+- 허용되지 않은 외부 issuer / audience / 키 / JWT alg 거부
+- Local Access Token과 OIDC ID Token의 혼용 거부
+- 이용 종료 테넌트 및 해지된 멤버십의 접근 차단
+- 동시 회원가입·중복 소속·중복 서비스 활성화 경합 조건
+- 외부 OIDC Provider 장애 또는 키 회전 중 서비스의 안전한 실패 처리
+- 테넌트별 OIDC 설정·자격 증명·로그인 트랜잭션 격리 및 다른 테넌트 설정 조회·변경 거부
+- 서로 다른 테넌트의 OIDC 응답·토큰·Callback 혼용 거부; 동일 issuer의 다른 client_id로 발급된 ID Token도 대상 설정과 대조
+- 테넌트 전환 시 대상 테넌트의 OIDC 인증 근거 검증 및 OIDC 로그인을 Local 인증으로 간주하는 우회 거부
+- 유효한 Local 로그인 후 소속 테넌트 선택 허용 및 기존 멤버십·MFA 검증 유지
+- 인증 오류를 통한 사용자 존재 여부 추정 및 과도한 로그인 시도 방지
+
+## 10. 개발 아키텍처 및 리포지토리 구조
+
+```text
+passport/
+├── apps/
+│   ├── web/                         # React + TypeScript 관리 포털
+│   │   └── src/
+│   │       ├── app/                 # Router, Provider, Layout
+│   │       ├── pages/               # 화면
+│   │       ├── features/            # authentication/account/tenant/... 기능
+│   │       └── shared/              # API Client, Components, Utils
+│   └── api/                         # FastAPI
+│       ├── src/passport/
+│       │   ├── main.py
+│       │   ├── bootstrap/           # lifespan, dependencies, composition
+│       │   ├── domain/              # entities, rules, ports
+│       │   ├── application/         # use cases
+│       │   ├── infrastructure/      # persistence, OIDC, JWT, security adapters
+│       │   └── presentation/        # HTTP routers, schemas, middleware
+│       ├── tests/
+│       └── migrations/
+├── docs/
+├── infra/
+├── scripts/
+└── README.md
+```
+
+**구현 원칙**
+
+1. Backend는 하나의 배포 가능한 Modular Monolith로 시작한다.
+2. `domain.ports`가 추상 인터페이스를 소유하고, `infrastructure.adapters`가 이를 구현한다.
+3. FastAPI `Depends()` 기반으로 Application Service를 주입한다. 전역 가변 Singleton에 의존하지 않는다.
+4. Stateless Provider 클라이언트/Adapter는 Lifespan에서 프로세스별로 생성·재사용한다. 테넌트별 OIDC 설정·자격 증명·검증 컨텍스트를 구분하며, 실행 중 설정 변경 반영 및 관련 캐시 무효화 정책은 D-06에서 결정한다. Request-scoped DB 세션은 요청마다 관리한다.
+5. Frontend와 Backend는 Git Repository를 공유하지만 코드 경계와 빌드는 분리한다.
+6. Browser는 원칙적으로 하나의 Origin 하에서 정적 Web과 `/api`를 이용하도록 Reverse Proxy를 둔다(권장 배포).
+7. FastAPI OpenAPI를 API 계약의 기준으로 활용하고, Frontend TypeScript Client 자동 생성은 권장한다.
+8. 데이터는 PostgreSQL을 초기 후보로 제안한다(선택은 별도 승인).
+
+## 11. 단계별 개발 범위 제안
+
+### Phase 1 — Passport 최소 제품 (P0)
+
+- Local 회원가입·로그인·비밀번호 변경·탈퇴 요청
+- 사용자 식별 및 개인정보 기본 관리
+- 테넌트별 독립 OIDC 설정, 외부 Provider 1종 이상 연동·검증·사용자 매핑 및 두 테넌트 이상의 설정·인증 격리 검증
+- Passport Local JWT 발급·검증 계약
+- Global Tenant 및 TenantMembership 관리
+- Application, TenantApplication 등록·조회 및 서비스 활성 상태
+- 인증/인가 경계, Cross-Tenant 보안 테스트
+- 기본 관리 포털: 로그인·내 계정·테넌트·멤버 관리
+- 감사 로그 및 운영 기본 관측성
+- Papyrus와의 최소 통합 시나리오 1개 E2E 검증
+
+### Phase 2 — 정식 기업 운영 강화 (P1)
+
+- 사용자 초대·수락·복구 플로우
+- 고도화된 계정 연결 관리, OIDC Provider 호환성 확대 및 테넌트별 설정 운영 고도화
+- 사용자별 서비스 이용 자격(ApplicationMembership), 필요한 경우에 한함
+- 비밀번호 초기화, 보안 이벤트 조회, 사용자·테넌트 상태 관리 UI
+- 개인정보 열람·반출, 운영자 감사 조회
+- 서비스 이용 종료, 변경 전파 및 운영 자동화
+- 정량 성능·가용성 요구와 장애 복원 검증
+
+### Phase 3 — 필요가 발생할 때만 확장 (P2)
+
+- 고급 인증 정책, SCIM 연동, 세부 서비스 관리 위임
+- 외부 협력자·게스트 정책
+- 별도 중앙 정책 엔진과 연계(실제 요구가 발생한 경우)
+- 서비스 테넌트 독립화는 **현재 범위 아님**. 별도 아키텍처 변경 결정 필요.
+
+**OTP MFA 개발 단계:** OTP 기반 MFA 및 테넌트별 설정 지원은 확정 요구사항이다. 개발 우선순위와 포함 단계는 D-12에서 결정하며, 장기 확장 기능으로 한정하지 않는다.
+
+## 12. 구현 착수 전 결정해야 할 핵심 질문
+
+| 우선     | 의사결정                                                  | 선택지/권장 방향                                             |
+| -------- | --------------------------------------------------------- | ------------------------------------------------------------ |
+| **D-01** | 외부 OIDC 로그인 결과를 Papyrus에서 어떻게 사용할 것인가? | 테넌트별 OIDC Provider가 Papyrus 대상 Access Token을 발급할 수 있는지, Papyrus의 테넌트별 발급자 신뢰 및 인증 컨텍스트 검증 방식, Passport 웹 세션과 별도 SaaS 세션의 관계 정의. 외부 토큰 원본 발급자 유지. **최우선** |
+| **D-02** | Passport Local JWT를 어떤 API가 수용하는가?               | Passport API 전용 / Papyrus 포함. `issuer`, `audience`, key distribution, 수명 및 철회 설계 필요 |
+| **D-03** | 브라우저 인증 상태 관리 방법은?                           | 웹 관리 포털은 서버 세션, 모바일 앱 등 API 직접 호출 사용자 클라이언트는 지원 시 Refresh Token 사용으로 확정(FR-AUTH-009-02). 쿠키 사용 시 `HttpOnly`, `Secure`, `SameSite` 및 CSRF 방어 적용은 확정(NFR-SEC-003). 구체적인 쿠키·토큰 저장 방식과 CSRF/XSS 방어 설계는 미결 |
+| D-04     | Local 사용자 가입 승인 및 이메일 확인 정책은?             | 공개 가입 / 초대 기반 / 관리 승인, 이메일 검증 필수 여부     |
+| D-05     | 테넌트 생성 권한과 의미는?                                | 플랫폼 관리자만 생성 / 승인된 사용자 셀프 생성; 법인 vs 논리 고객 조직 |
+| D-06     | 테넌트별 OIDC 설정 및 운영 세부 정책은?                    | 테넌트별 독립 설정과 해당 OIDC 서비스만 허용하는 외부 인증 정책은 확정(ADR-013, FR-OIDC-010~014, FR-TEN-009). Local 로그인 및 이후 테넌트 선택은 기존대로 유지. 로그인 전 테넌트 식별 방식, 설정 관리 권한 세분화, 설정 변경·캐시 무효화 및 기존 인증 컨텍스트 처리 정책은 미결 |
+| D-07     | 서비스 이용 자격은 테넌트 단위만 관리하는가?              | `TenantApplication`만 / 사용자별 `ApplicationMembership`도 관리 |
+| D-08     | 가입자와 외부 신원 계정 연결 정책은?                      | 명시적 연동 승인, 재인증, 충돌 해소 절차. 전역 User 연결이 테넌트별 OIDC 인증 요건을 우회하지 않아야 함 |
+| D-09     | 로그인 유지·Refresh/Logout/철회는?                        | FR-AUTH-009-01~07 및 하위 항목의 정책은 확정. 웹 최대 8시간·미사용 30분, Refresh Token 기반 클라이언트 최대 7일·미사용 3일, 백그라운드 자동 요청의 활동 제외, 현재/전체 로그아웃, 비밀번호 변경·재설정·계정 차단·비활성화 시 전체 로그인 폐기, 종료 대상 Passport 발급 Access Token 즉시 철회 및 Refresh Token 매회 교체·재사용 탐지 적용. Refresh Token 재사용 탐지 시 모든 Passport 관리 로그인 종료, 서버 세션·Refresh Token 전체 폐기 및 기존 Passport 발급 Access Token 전체 즉시 철회도 확정(FR-AUTH-009-07-01). Access Token 수명 및 키 변경 세부 정책은 미결. 연동 SaaS의 철회 상태 검증·반영 계약은 D-01~02에서, 보안·저장 정책은 D-03에서 결정 |
+| D-10     | PII 수집·보존·탈퇴 정책은?                                | 대상 국가·업종의 법령 검토 후 필수/선택 항목 및 보존 기간 확정 |
+| D-11     | 정량 운영 요구는?                                         | TPS, p95, 가용성 SLO, RPO/RTO, 이벤트 전파 최대 시간         |
+| D-12     | 테넌트별 OTP MFA의 세부 정책과 개발 단계는?                 | OTP 방식(TOTP/HOTP 등), 기본 활성 여부·설정 변경 권한, 등록·해제·분실 복구, Local/외부 OIDC 적용 및 SaaS 검증 계약, 인증 유효기간·재사용 범위, 설정 변경 반영 시점, 개발 우선순위·단계 결정 |
+
+## 13. 개발 완료 판정 (Definition of Done)
+
+- P0 각 요구사항에 대해 API 계약, 오류 응답, 단위·통합 테스트가 연결되어 있다.
+- 외부 OIDC와 Local 로그인 시나리오가 정상·실패 양쪽에서 검증된다.
+- 서로 다른 두 테넌트의 독립 OIDC 설정·로그인·Callback·토큰 검증이 격리되며, 다른 테넌트의 OIDC 인증 결과를 재사용하는 접근은 거부된다.
+- Local 인증 사용자는 기존과 동일하게 소속 테넌트를 선택하여 접근할 수 있으며, 멤버십·MFA·서비스 이용 자격 검증을 충족한다.
+- `User`, `Tenant`, `TenantMembership`, `Application`, `TenantApplication` 관계가 데이터 제약과 함께 검증된다.
+- Papyrus는 Passport에서 발급한 전역 `tenant_id`를 재사용한다.
+- 사용자 본인의 인증 성공만으로 타 테넌트 또는 미계약 SaaS 접근이 허용되지 않는다.
+- 외부 OIDC ID Token이 API Access Token으로 오용되지 않는다.
+- 정보 보안 이벤트에 감사 추적이 남으며 로그에 비밀/토큰 원문이 없다.
+- OpenAPI 계약과 Frontend 핵심 화면 E2E 테스트가 통과한다.
+- D-01~D-03 등 토큰 신뢰 경계와 세션 정책을 구현 전에 승인한다.
+
+## 14. 참고 표준 및 보안 가이드
+
+- [OpenID Connect Core 1.0](https://openid.net/specs/openid-connect-core-1_0.html) — `iss`·`sub` 기반 외부 신원 및 ID Token
+- [RFC 8725: JSON Web Token Best Current Practices](https://www.rfc-editor.org/rfc/rfc8725.html) — JWT 검증·토큰 용도 혼동 방지
+- [RFC 9068: JWT Profile for OAuth 2.0 Access Tokens](https://www.rfc-editor.org/rfc/rfc9068.html) — Access Token의 Audience 등 검증
+- [RFC 9700: Best Current Practice for OAuth 2.0 Security](https://www.rfc-editor.org/rfc/rfc9700.html) — 다중 발급자 인증 흐름의 Mix-Up 방어 및 PKCE 등
+- [OWASP Authentication Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html) — 인증 실패 처리 및 방어
+- [OWASP Password Storage Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html) — 비밀번호 해시
+- [OWASP Multi-Tenant Security Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Multi_Tenant_Security_Cheat_Sheet.html) — 테넌트 격리 및 접근 통제
+
+---
+
+**요약:** Passport는 공통 Identity/Account/Authentication/Global Tenant의 Source of Truth이며, 외부 OIDC 설정과 인증 허용 범위는 테넌트별로 독립 관리한다. Local 인증은 기존대로 유지하고 로그인 후 소속 테넌트를 선택하여 접근할 수 있다. OIDC 인증에서는 대상 테넌트에 설정된 서비스만 이용하며, 다른 테넌트의 인증 결과를 재사용하여 접근할 수 없다. Papyrus 등 SaaS는 공통 사용자·테넌트·이용 자격을 참조하면서 도메인별 리소스와 세부 접근 정책을 소유한다. 가장 먼저 결정할 미결 사항은 **테넌트별 외부 OIDC 토큰을 재발급하지 않는 조건에서 SaaS 간 로그인·API 인증과 인증 컨텍스트 검증을 어떻게 안전하게 연결할지**이다.
