@@ -6,7 +6,7 @@
 | 서비스 성격     | 중앙 Identity / Authentication / Account / Global Tenant Management |
 | 인증 방식       | External OIDC + Local Authentication                         |
 | 외부 OIDC 토큰  | 외부 Provider가 발급한 토큰을 Passport 자체 토큰으로 교환·재발급하지 않고 사용. |
-| 자체 인증 토큰  | Local Authentication을 통해 Passport가 JWT Access Token을 발급할 수 있음. 필요에 따라 신원 정보를 담은 JWT도 발급 가능. |
+| 자체 인증 토큰  | Local Authentication을 통해 Passport가 JWT Access Token을 발급할 수 있음. 별도의 신원 정보 전달용 JWT 또는 OIDC ID Token은 발급하지 않으며, 사용자 정보는 인증된 API로 조회. |
 | 프로토콜상 역할 | Passport를 **OIDC Provider** 또는 **OAuth2 Authorization Server**로 정의하지 않음. |
 | 개인정보        | Passport가 공통 가입자의 개인정보를 저장·관리.                |
 | 계정 생명주기   | 가입, 비밀번호 변경, 계정 변경 및 탈퇴 등을 Passport가 담당.  |
