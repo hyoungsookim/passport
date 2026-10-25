@@ -1,0 +1,3 @@
+[environment]
+python = "./apps/api/.venv"
+root = ["./apps/api"]
