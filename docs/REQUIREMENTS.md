@@ -42,6 +42,8 @@
 | ADR-012 | OTP 기반 MFA 인증을 지원하며, MFA 제공 여부는 테넌트별 설정으로 관리한다. | 확정             |
 | ADR-013 | 외부 OIDC 설정은 테넌트별로 독립 관리하며, OIDC 인증 시 대상 테넌트에 설정된 서비스만 이용한다. Local 인증은 기존과 동일하게 유지하며 로그인 후 소속 테넌트를 선택하여 접근할 수 있다. | 확정             |
 | ADR-014 | 웹 관리 포털과 모바일 등 모든 클라이언트의 API 인증은 Access Token으로 통일한다. 서버 세션 및 세션 ID를 이용한 인증은 제공하지 않으며, 로그인 유지는 Refresh Token으로 Access Token을 갱신한다. | 확정             |
+| ADR-015 | Local JWT Access Token은 RFC 9068을 기준으로 표준화한다. Local Access Token과 외부 JWT Access Token은 발급자·테넌트별 검증 설정을 적용하는 동일한 JWT 검증 엔진에서 처리하고, 검증 결과를 공통 내부 인증 정보로 변환하여 사용한다. | 확정             |
+| ADR-016 | 인증 기능은 추상 `Authentication` 클래스를 공통 계약으로 구현한다. Local·OIDC 인증 구현은 이를 상속하며, 향후 SAML 인증도 같은 계약을 구현하여 추가할 수 있도록 설계한다. | 확정             |
 
 ### 2.1 이번 범위에서 제외할 것
 
@@ -110,13 +112,17 @@ Local 인증은 테넌트별 OIDC 설정과 별개로 기존과 동일하게 제
 | ID          | 요구사항                                                     | 우선순위 | 상태 |
 | ----------- | ------------------------------------------------------------ | -------- | ---- |
 | FR-AUTH-001 | Local 계정은 안전하게 보관된 자격 증명으로 로그인할 수 있어야 한다. | P0       | 확정 |
-| FR-AUTH-002 | 인증 성공 시 Passport가 서명한 JWT Access Token을 발급할 수 있어야 한다. | P0       | 확정 |
+| FR-AUTH-002 | 인증 성공 시 Passport가 서명한 JWT Access Token을 발급할 수 있어야 한다. 토큰 포맷은 FR-AUTH-008-01의 공통 표준을 따른다. | P0       | 확정 |
 | FR-AUTH-003 | 사용자는 본인의 비밀번호를 변경할 수 있어야 한다.            | P0       | 확정 |
 | FR-AUTH-004 | 비밀번호 분실 시 검증된 복구 수단을 이용한 재설정 절차를 제공한다. | P1       | 확정 |
 | FR-AUTH-005 | 탈퇴·차단·비활성 상태의 계정은 신규 로그인 및 허가되지 않은 작업이 거부되어야 한다. | P0       | 확정 |
 | FR-AUTH-006 | 로그인 실패 횟수 제한, 속도 제한 및 계정 열거 방지 메시지를 적용한다. | P0       | 확정 |
 | FR-AUTH-007 | 비밀번호는 평문·복호화 가능한 형태가 아닌 적응형 해시(예: Argon2id)로 저장한다. | P0       | 확정 |
 | FR-AUTH-008 | Access Token의 수명, 키 식별자, 검증 규칙, 키 교체 절차를 정의한다. | P0       | 확정 |
+| FR-AUTH-008-01 | Local JWT Access Token은 RFC 9068의 JWT Access Token 프로파일을 따른다. `typ`은 `at+jwt`로 명시하고, `iss`, `sub`, `aud`, `exp`, `iat`, `jti`, `client_id` 등 필수 클레임과 서명·검증 규칙을 적용한다. | P0       | 확정 |
+| FR-AUTH-008-02 | Passport는 Local Access Token과 외부 JWT Access Token의 파싱·서명·표준 클레임 검증을 동일한 JWT 검증 엔진에서 처리해야 한다. 발급자별 차이는 검증 설정과 클레임 매핑으로 처리한다. | P0       | 확정 |
+| FR-AUTH-008-03 | 공통 검증 엔진은 Local 또는 대상 테넌트의 신뢰 설정에 따라 허용 발급자·알고리즘·검증 키·API audience·토큰 용도·필수 클레임을 검증해야 한다. 검증되지 않은 토큰의 값만으로 신뢰할 발급자나 키를 추가하지 않으며, 다른 테넌트의 OIDC 신뢰 설정을 재사용하지 않는다. ID Token은 API Access Token으로 허용하지 않는다. | P0       | 확정 |
+| FR-AUTH-008-04 | 검증을 통과한 Local Access Token과 외부 JWT Access Token은 Passport 사용자 신원·원본 발급자·인증 방식·테넌트 인증 범위를 표현하는 공통 내부 인증 정보로 변환하여 사용한다. 외부 신원은 `(issuer, subject)`로 Passport 사용자에 매핑하며, 이후 계정·테넌트·멤버십·MFA·이용 자격 검사는 공통 처리한다. 이 변환은 내부 자료 구조의 변환이며 외부 토큰의 재발급·교환을 의미하지 않는다. | P0       | 확정 |
 | FR-AUTH-009-01 | Access Token이 만료되어도 로그인 유지 조건을 충족하면 사용자에게 자격 증명 재입력을 요구하지 않고 새 Access Token을 발급해야 한다. | P0       | 확정 |
 | FR-AUTH-009-02 | 웹 관리 포털과 모바일 등 모든 클라이언트의 API 인증은 Access Token을 사용한다. 서버 세션 및 세션 ID를 이용한 인증은 모두 폐기하며 제공하지 않는다. 클라이언트별 로그인 유지 방식은 하위 항목으로 관리한다. | P0       | 확정 |
 | FR-AUTH-009-02-01 | 웹 관리 포털은 Access Token으로 API를 호출하고, 로그인 유지 조건을 충족하면 Refresh Token으로 Access Token을 갱신한다. | P0       | 확정 |
@@ -139,10 +145,13 @@ Local 인증은 테넌트별 OIDC 설정과 별개로 기존과 동일하게 제
 | FR-AUTH-009-07 | Refresh Token으로 Access Token을 갱신할 때마다 새 Refresh Token을 발급하고 이전 Refresh Token을 무효화해야 한다. 무효화된 Refresh Token의 재사용을 탐지해야 하며, 토큰 교체로 FR-AUTH-009-03의 클라이언트별 최대 로그인 유지 시간(웹 최대 8시간, 모바일 등 최대 7일)을 연장하거나 미사용 시간을 초기화하지 않는다. | P0       | 확정 |
 | FR-AUTH-009-07-01 | 무효화된 Refresh Token의 재사용을 탐지하면 해당 사용자의 모든 Passport 관리 로그인을 종료하고, 모든 Passport 관리 Refresh Token을 폐기해야 한다. 해당 사용자의 기존 Passport 발급 Access Token 전체를 즉시 철회하고 후속 API 요청을 거부하며, 재로그인을 요구한다. | P0       | 확정 |
 | FR-AUTH-010 | Local Authentication에서는 Access Token 외에 사용자 신원 정보 전달을 위한 별도의 JWT 또는 OIDC ID Token을 발급하지 않는다. 사용자 정보는 유효한 Access Token으로 인증된 현재 사용자 조회 API(`/api/v1/users/me` 등)를 통해 일반 JSON 응답으로 제공한다. | P1       | 확정 |
+| FR-AUTH-011 | 인증 구현의 공통 계약을 정의하는 추상 `Authentication` 클래스를 구현해야 한다. Local·OIDC 인증은 이를 상속한 개별 클래스로 구현하고, 향후 SAML 인증 구현을 추가할 수 있어야 한다. 인증 방식별 자격 증명·응답 검증은 개별 구현에서 수행하며, 검증 결과는 공통 내부 인증 정보로 제공한다. 현재 구현 대상은 Local·OIDC이며 SAML은 향후 확장 대상이다. | P0       | 확정 |
 
 **FR-AUTH-009 세분화:** 웹 관리 포털과 모바일 등 모든 클라이언트의 API 인증은 Access Token으로 통일하며, 서버 세션 및 세션 ID를 이용한 인증은 폐기한다(FR-AUTH-009-02 및 하위 항목 확정). 로그인 유지는 Refresh Token으로 Access Token을 갱신하는 방식으로 제공한다. 웹 최대 8시간·미사용 30분, 모바일 등 최대 7일·미사용 3일의 로그인 유지 시간과 사용자 활동 기준은 유지하며, 이는 개별 Access Token의 수명과 구분한다. 현재/전체 로그아웃, 비밀번호 변경·재설정·계정 차단·비활성화 시 전체 로그인 종료, Passport 발급 Access Token 즉시 철회 및 Refresh Token 교체·재사용 탐지 정책도 유지한다. 로그인 유지 시간·활동·토큰 철회 상태를 검증하기 위한 서버 측 상태 관리는 유지한다. 외부 OIDC 토큰의 원본 발급자 유지 및 Passport 토큰으로 재발급·교환하지 않는 결정은 변경하지 않는다. 이 결정으로 모바일 앱 개발 범위를 추가하지 않는다. 쿠키·토큰 저장 및 전달 등 보안 세부 정책과 외부 OIDC의 API용 토큰·갱신 계약, 연동 SaaS의 철회 상태 검증·반영 계약은 미결이다.
 
-**FR-AUTH-010 결정 범위:** 별도 신원 JWT를 발급하지 않으므로 해당 토큰의 명칭·클레임·검증 규칙·유효기간·철회 정책은 추가 설계하지 않는다. 이는 Access Token에 `sub` 등 사용자 식별 정보를 포함하지 않는다는 의미가 아니다. Local Access Token의 수용 API와 클레임·검증 계약은 FR-AUTH-008 및 D-02에서 계속 정의한다.
+**JWT Access Token 공통화:** FR-AUTH-008-01~04는 확정이다. Local 토큰은 RFC 9068을 따르고, 외부 JWT Access Token은 Provider별로 합의한 토큰 프로파일·검증 설정·클레임 매핑을 공통 검증 엔진에 적용한다. 모든 외부 Provider의 토큰이 이미 RFC 9068을 준수한다고 가정하지 않는다. 공통 내부 인증 정보의 상세 필드·자료형과 Provider별 매핑 계약은 후속 설계하며, 인증 방식 및 검증된 테넌트·OIDC 설정의 연관성을 보존한다. JWT 검증 성공 이후에도 로그인 유지·철회 상태와 최신 접근 자격 검사를 적용한다.
+
+**FR-AUTH-010 결정 범위:** 별도 신원 JWT를 발급하지 않으므로 해당 토큰의 명칭·클레임·검증 규칙·유효기간·철회 정책은 추가 설계하지 않는다. 이는 Access Token에 `sub` 등 사용자 식별 정보를 포함하지 않는다는 의미가 아니다. Local Access Token의 포맷·공통 검증·내부 인증 정보 변환은 FR-AUTH-008-01~04로 확정하며, 수용 API 및 audience 등 구체적인 계약은 D-02에서 계속 정의한다.
 
 **검증 예:** 올바른 자격 증명으로 인증 성공, 잘못된 자격 증명으로 실패, 차단 계정 접근 거부, 비밀번호 변경 이후 기존 인증 수단의 처리 정책 확인, 만료·변조된 JWT 거부.
 
@@ -158,7 +167,9 @@ Local 인증은 테넌트별 OIDC 설정과 별개로 기존과 동일하게 제
 | FR-OIDC-006 | Provider 설정 오류, 키 교체, 인증 취소, 통신 장애에 대한 실패 처리를 제공한다. | P0       | 확정 |
 | FR-OIDC-007 | 브라우저 로그인에 OIDC Authorization Code Flow를 채택한다면 `state`, `nonce` 및 PKCE 등 필요한 방어를 적용한다. | P0       | 확정 |
 | FR-OIDC-008 | 대상 테넌트에 설정되지 않았거나 비활성인 Provider의 인증 결과와 API 대상이 아닌 외부 Access Token을 거부한다. 다른 테넌트에서 승인된 Provider라도 대상 테넌트의 신뢰 대상으로 자동 인정하지 않는다. | P0       | 확정 |
-| FR-OIDC-009 | 외부 토큰의 형태(JWT/opaque)와 검증 방식은 Provider별 지원 계약에 명시한다. | P0       | 미결 |
+| FR-OIDC-009 | 외부 Access Token의 포맷·검증 방식은 하위 항목과 Provider별 지원 계약으로 관리한다. JWT Access Token의 공통 처리 방식은 확정이며, opaque Access Token의 지원 여부·검증 방식은 미결이다. | P0       | 미결 |
+| FR-OIDC-009-01 | 외부 JWT Access Token은 FR-AUTH-008-02~04에 따라 Local Access Token과 동일한 검증 엔진에서 검증하고 공통 내부 인증 정보로 변환한다. Provider별 토큰 프로파일·API audience·검증 키·필수 클레임·클레임 매핑을 연동 계약에 명시하며 원본 토큰과 발급자를 유지한다. | P0       | 확정 |
+| FR-OIDC-009-02 | 외부 opaque Access Token의 지원 여부 및 지원 시 검증·공통 내부 인증 정보 변환 계약은 별도로 결정한다. | P0       | 미결 |
 | FR-OIDC-010 | 테넌트별 OIDC 설정에 issuer, client_id, 필요한 자격 증명 참조 및 활성 상태를 독립적으로 관리한다. OIDC 인증에서는 대상 테넌트의 설정만 사용한다. | P0       | 확정 |
 | FR-OIDC-011 | 외부 OIDC 로그인 시작 전에 대상 테넌트를 식별하고 해당 테넌트의 OIDC 설정으로 인증을 시작한다. 테넌트 식별 UI·URL 등 구체적인 진입 방식은 별도 결정한다. | P0       | 확정 |
 | FR-OIDC-012 | OIDC 로그인 트랜잭션을 시작한 tenant_id와 OIDC 설정에 인증 요청 및 Callback 검증을 연결한다. Callback 경로·파라미터의 테넌트 또는 설정 변조와 다른 로그인 트랜잭션의 인증 응답 재사용을 거부한다. | P0       | 확정 |
@@ -326,27 +337,27 @@ erDiagram
 | 기능                           | HTTP 메서드 및 경로(초안)                     | 호출 주체         |
 | ------------------------------ | --------------------------------------------- | ----------------- |
 | Local 로그인                   | `POST /api/v1/auth/local/login`               | 사용자            |
-| 테넌트별 외부 OIDC 시작        | `GET /api/v1/tenants/{tenantId}/auth/oidc/start` | 브라우저          |
-| 테넌트별 외부 OIDC Callback    | `GET /api/v1/tenants/{tenantId}/auth/oidc/callback` | 브라우저/Provider |
-| 테넌트 OIDC 설정 관리          | `GET/PUT /api/v1/tenants/{tenantId}/oidc-configuration` | 해당 권한자       |
+| 테넌트별 외부 OIDC 시작        | `GET /api/v1/tenants/{tenant_id}/auth/oidc/start` | 브라우저          |
+| 테넌트별 외부 OIDC Callback    | `GET /api/v1/tenants/{tenant_id}/auth/oidc/callback` | 브라우저/Provider |
+| 테넌트 OIDC 설정 관리          | `GET/PUT /api/v1/tenants/{tenant_id}/oidc-configuration` | 해당 권한자       |
 | 현재 사용자 조회               | `GET /api/v1/users/me`                        | 사용자            |
 | 현재 사용자 수정               | `PATCH /api/v1/users/me`                      | 사용자            |
 | 비밀번호 변경                  | `POST /api/v1/users/me/password`              | Local 사용자      |
 | 탈퇴 요청                      | `POST /api/v1/users/me/withdrawal`            | 사용자            |
 | 소속 테넌트 목록               | `GET /api/v1/users/me/tenants`                | 사용자            |
 | 테넌트 생성/목록               | `POST/GET /api/v1/tenants`                    | 승인된 관리자     |
-| 테넌트 조회/수정               | `GET/PATCH /api/v1/tenants/{tenantId}`        | 해당 권한자       |
-| 멤버십 관리                    | `GET/POST /api/v1/tenants/{tenantId}/members` | 해당 권한자       |
-| 테넌트 서비스 목록             | `GET /api/v1/tenants/{tenantId}/applications` | 해당 권한자       |
+| 테넌트 조회/수정               | `GET/PATCH /api/v1/tenants/{tenant_id}`        | 해당 권한자       |
+| 멤버십 관리                    | `GET/POST /api/v1/tenants/{tenant_id}/members` | 해당 권한자       |
+| 테넌트 서비스 목록             | `GET /api/v1/tenants/{tenant_id}/applications` | 해당 권한자       |
 | SaaS 앱 등록/조회              | `POST/GET /api/v1/applications`               | 플랫폼 관리자     |
 | SaaS 연동용 접근 자격 검증·조회 | **경로·스키마 설계 필요** (요청별 최신 버전 검증 및 현재 자격 조회; FR-APP-008) | 인증된 SaaS       |
 
 - 외부 공개 API는 OpenAPI 계약으로 관리하며 하위 호환 정책을 정의한다.
-- Python 내부 속성명은 `snake_case`를 기본으로 하고, 외부 JSON 형식은 `camelCase`를 **권장**하되 승인 후 고정한다.
+- Python 내부 속성명과 외부 JSON 형식 모두 `snake_case`를 기본으로 한다.
 - 목록 API는 페이징·검색·정렬 및 인가 필터를 제공한다.
 - 상태 변경 API는 동시성 제어, 감사 기록 및 재시도 시 중복 처리 방지를 고려한다.
 - 접근 자격 변경 API의 DB 커밋 후 Valkey 반영 실패 응답에는 DB 저장 완료와 Valkey 반영 미완료를 구분하여 표시한다. 동일 요청의 재시도는 상태 변경·버전 갱신을 중복 적용하지 않아야 하며, Valkey 반영 완료 전에는 변경 완료로 응답하지 않는다(FR-APP-008-09).
-- OIDC Callback의 tenantId는 로그인 시작 시 서버가 바인딩한 테넌트·설정과 대조한다. 테넌트 경로만으로 인증 응답의 적용 대상을 신뢰하지 않으며, OIDC 설정 조회 응답에 자격 증명 비밀값을 포함하지 않는다.
+- OIDC Callback의 tenant_id는 로그인 시작 시 서버가 바인딩한 테넌트·설정과 대조한다. 테넌트 경로만으로 인증 응답의 적용 대상을 신뢰하지 않으며, OIDC 설정 조회 응답에 자격 증명 비밀값을 포함하지 않는다.
 - 401(인증 실패), 403(인가 실패), 404(보호 대상 은닉 필요 시), 409(상태 충돌), 422(입력 오류) 등을 일관되게 사용한다.
 
 ## 8. 핵심 사용 시나리오 및 인수 기준
@@ -454,6 +465,8 @@ erDiagram
 - 다른 테넌트의 멤버를 추가·제거하려는 시도
 - 허용되지 않은 외부 issuer / audience / 키 / JWT alg 거부
 - Local Access Token과 OIDC ID Token의 혼용 거부
+- Local JWT Access Token의 RFC 9068 준수 및 Local·외부 JWT Access Token의 동일 검증 엔진 처리·공통 내부 인증 정보 변환 검증
+- 공통 검증 엔진에서 발급자·검증 키·API audience·토큰 용도·테넌트 신뢰 설정의 혼용 거부와 `(issuer, subject)` 기반 사용자 매핑 검증
 - 웹·모바일 API의 유효한 Access Token 인증 및 세션 ID만을 사용한 인증 거부
 - 이용 종료 테넌트 및 해지된 멤버십의 접근 차단
 - 동시 회원가입·중복 소속·중복 서비스 활성화 경합 조건
@@ -481,8 +494,9 @@ passport/                              # 리포지토리 루트
 │       │   ├── py.typed
 │       │   ├── main.py                # FastAPI 앱 팩터리 및 ASGI app
 │       │   ├── server.py              # 서버 실행 진입점
-│       │   ├── api/                    # HTTP 요청·응답 처리
-│       │   ├── apps/                   # 업무 기능 및 지원 컴포넌트
+│       │   ├── api/                   # HTTP 요청·응답 처리
+│       │   ├── apps/                  # 업무 기능 및 지원 컴포넌트
+│       │   │   ├── application/       # SaaS Application 정보
 │       │   │   ├── authentication/    # Local/OIDC/MFA, Access Token·Refresh Token
 │       │   │   ├── identity/          # 사용자·계정 생명주기
 │       │   │   ├── tenant/            # 전역 테넌트·멤버십
@@ -494,7 +508,8 @@ passport/                              # 리포지토리 루트
 │       │   ├── db/
 │       │   │   └── models/            # SQLAlchemy ORM 모델
 │       │   ├── settings/              # 실행 환경 설정
-│       │   └── utils/                 # 범용 보조 함수
+│       │   ├── utils/                 # 범용 보조 함수
+│       │   └── workers/               # Workers
 │       ├── tests/                     # Backend 테스트
 │       ├── migrations/                # DB 마이그레이션
 │       ├── .python-version
@@ -537,6 +552,7 @@ passport/                              # 리포지토리 루트
 7. Frontend와 Backend는 Git Repository를 공유하지만 코드 경계와 빌드는 분리한다. Browser는 하나의 Origin 하에서 정적 Web과 `/api`를 이용하도록 Reverse Proxy를 두는 배포를 권장한다.
 8. FastAPI OpenAPI를 API 계약의 기준으로 활용하고, Frontend TypeScript Client 자동 생성은 권장한다.
 9. 현재 Backend 의존성에는 SQLAlchemy의 asyncio 지원과 PostgreSQL 드라이버인 psycopg가 등록되어 있다. 실제 DB 연결 설정·모델·마이그레이션은 후속 구현 대상이다.
+10. `Authentication` 추상 클래스는 `apps/authentication`에서 인증 방식의 공통 계약을 정의하며, 호출부는 이 계약에 의존한다. Local·OIDC 구현과 향후 SAML 구현은 각 방식의 검증을 담당하고 공통 내부 인증 정보를 반환한다. JWT 검증이 필요한 구현은 FR-AUTH-008-02의 공통 JWT 검증 엔진을 재사용한다.
 
 ### 10.4 빌드 및 실행 구성
 
@@ -567,6 +583,12 @@ uv run uvicorn passport.main:app --reload
 소스 배포본과 wheel 빌드는 같은 디렉터리에서 `uv build`로 수행한다. 실행 후 API 문서는 `/docs`, OpenAPI 명세는 `/openapi.json`에서 확인한다.
 
 ## 11. 단계별 개발 범위 제안
+
+### Phase 0 — 기반 구성 구현 (확정)
+
+- `db/models/`에 확정된 데이터 모델의 SQLAlchemy ORM 모델 클래스 구현
+- `settings/`에 애플리케이션 설정 구현
+- `core/`에 비동기 방식의 로깅 구현
 
 ### Phase 1 — Passport 최소 제품 (P0)
 
@@ -604,7 +626,7 @@ uv run uvicorn passport.main:app --reload
 | 우선     | 의사결정                                                  | 선택지/권장 방향                                             |
 | -------- | --------------------------------------------------------- | ------------------------------------------------------------ |
 | **D-01** | 외부 OIDC 로그인 결과를 Papyrus에서 어떻게 사용할 것인가? | 테넌트별 OIDC Provider가 Papyrus 대상 Access Token을 발급할 수 있는지, Papyrus의 테넌트별 발급자 신뢰 및 인증 컨텍스트 검증 방식, Passport 웹 관리 포털과 SaaS의 로그인 상태 연계 방식 정의. 외부 토큰 원본 발급자 유지. **최우선** |
-| **D-02** | Passport Local JWT Access Token을 어떤 API가 수용하는가?  | Passport API 전용 / Papyrus 포함. `issuer`, `audience`, key distribution, 수명 및 철회 설계 필요. 별도 신원 JWT는 발급하지 않음(FR-AUTH-010 확정) |
+| **D-02** | Passport Local JWT Access Token을 어떤 API가 수용하는가?  | Local 토큰의 RFC 9068 표준화 및 Local·외부 JWT Access Token의 공통 검증 엔진·내부 인증 정보 변환은 확정(FR-AUTH-008-01~04). 수용 API 범위(Passport API 전용 / Papyrus 포함), 구체적인 `issuer`·`audience` 값, 키 배포·수명·철회 검증 계약, 공통 내부 인증 정보의 상세 필드 및 Provider별 매핑은 후속 설계. 외부 opaque Access Token 지원 여부는 미결(FR-OIDC-009-02). 별도 신원 JWT는 발급하지 않음(FR-AUTH-010 확정) |
 | **D-03** | 브라우저 토큰 저장·전달 방법은?                           | 웹 관리 포털을 포함한 모든 클라이언트의 API 인증은 Access Token으로 통일하고, 서버 세션 인증은 폐기하며, Refresh Token으로 Access Token을 갱신한다(FR-AUTH-009-02 및 하위 항목 확정). 쿠키 사용 시 `HttpOnly`, `Secure`, `SameSite` 및 CSRF 방어 적용은 확정(NFR-SEC-003). 구체적인 토큰 저장 위치·전달 방식과 CSRF/XSS 방어 설계는 미결 |
 | D-04     | Local 사용자 가입 승인 및 이메일 확인 정책은?             | 공개 가입 / 초대 기반 / 관리 승인, 이메일 검증 필수 여부     |
 | D-05     | 테넌트 생성 권한과 의미는?                                | 플랫폼 관리자만 생성 / 승인된 사용자 셀프 생성; 법인 vs 논리 고객 조직 |
@@ -620,6 +642,8 @@ uv run uvicorn passport.main:app --reload
 
 - P0 각 요구사항에 대해 API 계약, 오류 응답, 단위·통합 테스트가 연결되어 있다.
 - 외부 OIDC와 Local 로그인 시나리오가 정상·실패 양쪽에서 검증된다.
+- 추상 `Authentication` 클래스와 이를 상속한 Local·OIDC 구현이 공통 인증 계약을 충족하며, 향후 SAML 구현을 추가할 수 있는 구조로 구성된다(FR-AUTH-011).
+- Local JWT Access Token은 RFC 9068을 따르며, Local·외부 JWT Access Token은 동일한 검증 엔진을 거쳐 공통 내부 인증 정보로 변환된다. 발급자·테넌트별 검증 설정과 원본 발급자·인증 범위가 보존된다.
 - 서로 다른 두 테넌트의 독립 OIDC 설정·로그인·Callback·토큰 검증이 격리되며, 다른 테넌트의 OIDC 인증 결과를 재사용하는 접근은 거부된다.
 - Local 인증 사용자는 기존과 동일하게 소속 테넌트를 선택하여 접근할 수 있으며, 멤버십·MFA·서비스 이용 자격 검증을 충족한다.
 - `User`, `Tenant`, `TenantMembership`, `Application`, `TenantApplication` 관계가 데이터 제약과 함께 검증된다.

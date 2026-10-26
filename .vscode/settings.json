@@ -1,0 +1,19 @@
+{
+    "python.terminal.activateEnvironment": true,
+    "python.terminal.useEnvFile": true,
+    "python.languageServer": "None",
+    
+    "ty.disableLanguageServices": false,
+    "ty.diagnosticMode": "workspace",
+    "ty.importStrategy": "fromEnvironment",
+
+    // Pylance 의 타입 검사와 중복 진단을 피하기 위해 비활성화 (타입 체크는 ty 가 담당)
+    "python.analysis.typeCheckingMode": "off",
+
+    // 테스트 러너를 pytest 로 고정하고 프로젝트 venv(Python 3.14)로 실행하도록 지정.
+    // 인자/커버리지 옵션은 pyproject.toml [tool.pytest.ini_options] 를 그대로 사용한다.
+    "python.testing.pytestEnabled": true,
+    "python.testing.unittestEnabled": false,
+    "python.testing.pytestArgs": ["tests"],
+    "python.testing.cwd": "${workspaceFolder}"
+}
