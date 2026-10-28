@@ -587,7 +587,7 @@ uv run uvicorn passport.main:app --reload
 ### Phase 0 — 기반 구성 구현 (확정)
 
 - `db/models/`에 확정된 데이터 모델의 SQLAlchemy ORM 모델 클래스 구현
-- `settings/`에 애플리케이션 설정 구현
+- `settings/`에 config.json 파일을 읽는 애플리케이션 설정 구현
 - `core/`에 비동기 방식의 로깅 구현
 
 ### Phase 1 — Passport 최소 제품 (P0)
