@@ -586,9 +586,15 @@ uv run uvicorn passport.main:app --reload
 
 ### Phase 0 — 기반 구성 구현 (확정)
 
+- `db/session.py`에 비동기 연결 코드 및 커넥션 풀링 구현.
+- DB 세션은 FastAPI DI를 통해 요청별 `AsyncSession`으로 공급하고, 요청 종료 시 정리한다. 요청 간 세션을 공유하지 않으며, 커넥션 풀 크기와 연결 대기 타임아웃을 설정할 수 있도록 한다.
+- DB 트랜잭션은 `apps`의 업무 서비스에서 유스케이스 단위로 경계와 커밋 책임을 관리하고, 예외 발생 시 롤백한다. 세션 공급 의존성은 자동 커밋하지 않으며, 접근 자격 상태와 관련 `access_version` 변경은 같은 트랜잭션에서 원자적으로 처리한다.
 - `db/models/`에 확정된 데이터 모델의 SQLAlchemy ORM 모델 클래스 구현
-- `settings/`에 config.json 파일을 읽는 애플리케이션 설정 구현
+- `migrations/`에 Alembic 기반 DB 마이그레이션 설정 및 초기 마이그레이션 작성. ORM 공통 Base·메타데이터를 연결하고, 애플리케이션 실행용 DB 계정과 마이그레이션용 DB 계정을 분리한다.
+- `settings/`에 OS 환경변수 `PASSPORT_CONFIG_PATH`로 지정한 `config.json` 파일의 전체 경로를 읽는 애플리케이션 설정 구현. 환경변수가 설정되지 않았거나 빈 값이면 Backend 프로세스의 현재 작업 디렉터리(CWD)에 있는 `config.json`을 기본 설정 파일로 사용한다.
+- API와 Alembic은 동일한 설정 로더를 사용한다. 설정 파일을 읽을 수 없거나 JSON 형식·설정값 검증에 실패하면 명확한 오류와 함께 실행을 중단하며, 환경변수로 지정한 경로의 오류를 기본 경로로 대체하지 않는다.
 - `core/`에 비동기 방식의 로깅 구현
+- `main.py`에서 앱 Lifespan을 등록하여 DB 엔진·커넥션 풀·로깅 자원을 프로세스별로 초기화하고, 앱 종료 시 연결 정리 및 남은 로그 배출을 수행한다.
 
 ### Phase 1 — Passport 최소 제품 (P0)
 
