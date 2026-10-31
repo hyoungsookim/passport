@@ -7,6 +7,7 @@ import pytest_asyncio
 from fastapi import Depends, FastAPI
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.pool import AsyncAdaptedQueuePool
 
@@ -37,10 +38,12 @@ async def client(database):
     Session = Annotated[AsyncSession, Depends(get_session)]
 
     @app.post("/probe")
-    async def create_probe(commit: bool, session: Session):
+    async def create_probe(session: Session, commit: bool = False, fail: bool = False):
         await session.execute(text("CREATE TEMP TABLE probe (x int)"))
         if commit:
             await session.commit()
+        if fail:
+            raise RuntimeError
 
     @app.get("/probe")
     async def probe(session: Session):
@@ -52,16 +55,20 @@ async def client(database):
     async def pid(session: Session):
         return await session.scalar(text("SELECT pg_backend_pid()"))
 
-    async with AsyncClient(transport=ASGITransport(app), base_url="http://t") as c:
+    transport = ASGITransport(app, raise_app_exceptions=False)
+    async with AsyncClient(transport=transport, base_url="http://t") as c:
         yield c
     await engine.dispose()
 
 
-async def test_uncommitted_work_is_rolled_back_when_request_ends(client):
+@pytest.mark.parametrize(("params", "status"), [({}, 200), ({"fail": True}, 500)])
+async def test_uncommitted_work_is_rolled_back_when_request_ends(
+    client, params, status
+):
     pid = (await client.get("/pid")).json()
-    response = await client.post("/probe", params={"commit": False})
+    response = await client.post("/probe", params=params)
 
-    assert response.status_code == 200
+    assert response.status_code == status
     assert (await client.get("/probe")).json() is False
     assert (await client.get("/pid")).json() == pid
 
@@ -87,3 +94,14 @@ async def test_lifespan_opens_pool_and_disposes_it_on_shutdown(database):
 
     assert isinstance(engine.pool, AsyncAdaptedQueuePool)
     assert engine.pool.checkedin() == 0
+
+
+async def test_api_account_cannot_change_schema(database):
+    _, url = database
+    engine = create_engine(url, pool_size=1, pool_timeout=5)
+    try:
+        async with engine.connect() as connection:
+            with pytest.raises(ProgrammingError, match="permission denied"):
+                await connection.execute(text("CREATE TABLE public.denied (x int)"))
+    finally:
+        await engine.dispose()
