@@ -3,6 +3,7 @@
 from collections.abc import AsyncIterator
 
 from fastapi import Request
+from sqlalchemy import URL
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -11,7 +12,9 @@ from sqlalchemy.ext.asyncio import (
 )
 
 
-def create_engine(url: str, *, pool_size: int, pool_timeout: float) -> AsyncEngine:
+def create_engine(
+    url: str | URL, *, pool_size: int, pool_timeout: float
+) -> AsyncEngine:
     return create_async_engine(url, pool_size=pool_size, pool_timeout=pool_timeout)
 
 
