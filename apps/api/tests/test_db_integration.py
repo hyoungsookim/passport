@@ -8,21 +8,28 @@ from fastapi import Depends, FastAPI
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.pool import AsyncAdaptedQueuePool
 
 from passport.db.session import create_engine, create_session_factory, get_session
+from passport.main import create_app
 from passport.settings.config import SettingsError, database_url, load_settings
 
 pytestmark = pytest.mark.asyncio
 
 
-@pytest_asyncio.fixture
-async def client():
+@pytest.fixture
+def database():
     try:
         database = load_settings().database
         url = database_url(database, "PASSPORT_DB_USERNAME", "PASSPORT_DB_PASSWORD")
     except SettingsError as e:
         pytest.skip(f"database not configured: {e}")
+    return database, url
 
+
+@pytest_asyncio.fixture
+async def client(database):
+    database, url = database
     # One pooled connection, so every request below reuses the same backend.
     engine = create_engine(url, pool_size=1, pool_timeout=database.pool_timeout)
     app = FastAPI()
@@ -66,3 +73,17 @@ async def test_committed_work_persists_after_request_ends(client):
     assert response.status_code == 200
     assert (await client.get("/probe")).json() is True
     assert (await client.get("/pid")).json() == pid
+
+
+async def test_lifespan_opens_pool_and_disposes_it_on_shutdown(database):
+    app = create_app()
+
+    async with app.router.lifespan_context(app):
+        engine = app.state.session_factory.kw["bind"]
+        async with app.state.session_factory() as session:
+            assert await session.scalar(text("SELECT 1")) == 1
+        assert isinstance(engine.pool, AsyncAdaptedQueuePool)
+        assert engine.pool.checkedin() == 1
+
+    assert isinstance(engine.pool, AsyncAdaptedQueuePool)
+    assert engine.pool.checkedin() == 0

@@ -1,9 +1,9 @@
 {
-  "database": {
-    "host": "localhost",
-    "port": 5432,
-    "name": "passport",
-    "pool_size": 5,
-    "pool_timeout": 30
-  }
+    "database": {
+        "host": "localhost",
+        "port": 5432,
+        "name": "passport",
+        "pool_size": 5,
+        "pool_timeout": 30
+    }
 }
