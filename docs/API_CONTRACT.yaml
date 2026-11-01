@@ -343,7 +343,7 @@ info:
     2. `POST /bff/api/v1/auth/oidc/{tenant_code}/authorizations { "intent": "login" }`
        - 서버는 로그인 트랜잭션(state, nonce, PKCE verifier)을 테넌트·설정·설정 버전에 묶어 저장한다.
        - 응답의 `authorization_url`로 브라우저를 이동한다.
-    3. Provider가 `GET /auth/oidc/callback/{tenant_id}`로 돌려보낸다. 서버는 다음을 검증한다(FR-OIDC-003/007/008/012).
+    3. Provider가 Passport BFF의 `GET /bff/auth/oidc/callback/{tenant_id}`로 돌려보낸다. 서버는 다음을 검증한다(FR-OIDC-003/007/008/012).
        - `state`로 찾은 트랜잭션의 테넌트가 경로의 `tenant_id`와 같은지
        - `iss` 응답 파라미터(RFC 9207)가 있으면 그 값이 설정 발급자와 같은지
        - PKCE 코드 교환
@@ -442,16 +442,16 @@ info:
     | FR-AUTH-001, 005, 006, 007 | `loginLocal`, `reauthenticateWithPassword` |
     | FR-AUTH-002, 008, 008-01 | `loginLocal`, `issueToken`, `getJwks` |
     | FR-AUTH-003, 009-05-01, 009-06-02 | `changePassword` |
-    | FR-AUTH-008-02, 008-03, 008-04 | `issueToken`, `verifyAccess`, `oidcCallback` |
+    | FR-AUTH-008-02, 008-03, 008-04 | `issueToken`, `verifyAccess`, `bffOidcCallback` |
     | FR-AUTH-009-01, 009-02, 009-03, 009-07, 009-07-01 | `issueToken` |
     | FR-AUTH-009-04, 009-06-01 | `logout`, `logoutAll` |
     | FR-AUTH-009-05-03 | `updateUserStatus` |
-    | FR-AUTH-011 | 구현 구조 요구(API 영향 없음). `loginLocal`, `oidcCallback`이 같은 로그인·토큰 계약을 공유 |
-    | FR-OIDC-001, 003, 004, 007, 008, 012 | `startOidcAuthorization`, `oidcCallback` |
-    | FR-OIDC-002, 013, 014 | `oidcCallback`, `issueToken` |
-    | FR-OIDC-005, FR-USER-006 | `oidcCallback`, `linkIdentity`, `listMyIdentities` |
-    | FR-OIDC-006, 016 | `oidcCallback`, `issueToken`, `putTenantOidcConfiguration` |
-    | FR-OIDC-009, 009-01, 009-02 | 모든 Bearer API(외부 토큰 거부), `oidcCallback` |
+    | FR-AUTH-011 | 구현 구조 요구(API 영향 없음). `loginLocal`, `bffOidcCallback`이 같은 로그인·토큰 계약을 공유 |
+    | FR-OIDC-001, 003, 004, 007, 008, 012 | `startOidcAuthorization`, `bffOidcCallback` |
+    | FR-OIDC-002, 013, 014 | `bffOidcCallback`, `issueToken` |
+    | FR-OIDC-005, FR-USER-006 | `bffOidcCallback`, `linkIdentity`, `listMyIdentities` |
+    | FR-OIDC-006, 016 | `bffOidcCallback`, `issueToken`, `putTenantOidcConfiguration` |
+    | FR-OIDC-009, 009-01, 009-02 | 모든 Bearer API(외부 토큰 거부), `bffOidcCallback` |
     | FR-OIDC-010, FR-TEN-009, D-06 | `getTenantOidcConfiguration`, `putTenantOidcConfiguration`, `adminGetTenantOidcConfiguration`, `adminPutTenantOidcConfiguration` |
     | FR-OIDC-011 | `getTenantLoginOptions`, `startOidcAuthorization` |
     | FR-OIDC-015, 017, 018 | 서버 내부 감지 처리. 결과는 `issueToken`, `verifyAccess`의 `token_revoked` |
@@ -472,15 +472,15 @@ info:
     | FR-MFA-001, 003, 005 | `startTotpEnrollment`, `confirmTotpEnrollment`, `verifyMfa`, `issueToken` |
     | FR-MFA-004, 004-01, 004-02 | `getMyTenantMfa`, `recoverMfaWithCode`, `disableTotp`, `createMfaResetRequest`, `listTenantMfaResetRequests`, `approveTenantMfaResetRequest`, `rejectTenantMfaResetRequest`, `adminListMfaResetRequests`, `adminApproveMfaResetRequest`, `adminRejectMfaResetRequest` |
     | FR-WEB-001~006, 008~010 | 위 API를 사용하는 화면(UI 요구사항) |
-    | ADR-014, FR-AUTH-009-02, D-03 | `bffLoginLocal`, `bffGetSession`, `bffSelectContext`, `bffLogout`, `bffLogoutAll`, `/bff/api/v1/*` 중계 전체 |
-    | FR-AUTH-009-02-01 | `bffLoginLocal`, `bffGetSession`, `bffSelectContext`, `bffSsoCallback`, `exchangeSsoCode`, `issueToken` |
+    | ADR-014, FR-AUTH-009-02, D-03 | `bffLoginLocal`, `bffOidcCallback`, `bffGetSession`, `bffSelectContext`, `bffLogout`, `bffLogoutAll`, `/bff/api/v1/*` 중계 전체 |
+    | FR-AUTH-009-02-01 | `bffLoginLocal`, `bffOidcCallback`, `bffGetSession`, `bffSelectContext`, `bffSsoCallback`, `exchangeSsoCode`, `issueToken` |
     | FR-AUTH-009-02-02 | `loginLocal`, `issueToken`(직접 API 클라이언트) |
     | FR-AUTH-009-02-03 | `bffGetSession`, `bffSelectContext`, `bffLogout`, `bffLogoutAll`, `bffAuthorizeSso`, `logout`, `logoutAll`, `issueToken`, `exchangeSsoCode`, `verifyAccess` |
     | FR-AUTH-009-02-04 | `bffLoginLocal`, `bffSsoCallback`, `bffAuthorizeSso`, `/bff/api/v1/*` 중계 전체(`x-bff-upstream`) |
     | D-01 서비스 간 SSO | `bffStartSso`, `bffAuthorizeSso`, `bffSsoCallback`, `exchangeSsoCode` |
     | `/bff/api/v1/*` 중계 operation | `x-bff-upstream`이 가리키는 `/api/v1` operation과 같은 요구사항 |
     | NFR-SEC-002 | 3장 |
-    | NFR-SEC-003 | 2장, 17장, `bffLoginLocal`, `bffSsoCallback` |
+    | NFR-SEC-003 | 2장, 17장, `bffLoginLocal`, `bffOidcCallback`, `bffSsoCallback` |
     | NFR-SEC-004 | 4장 경계, 모든 테넌트 범위 API |
     | NFR-SEC-007 | 각 operation의 `x-audit-event` |
     | NFR-OPS-001 | `X-Request-ID`, `getLiveness`, `getReadiness` |
@@ -552,7 +552,8 @@ info:
     - BFF client 등록에는 서버 자격 증명, 고정 audience, 정확한 callback URI가 필요하다.
       관리 포털 client는 설치 설정으로, SaaS client는 해당 Application과 연결하여 관리한다.
       이 client 인증은 사용자 인증·현재 접근 자격·MFA 검사를 대체하지 않는다.
-    - 외부 Provider의 OIDC callback과 JWKS·공개 헬스 체크는 일반 BFF 프록시 경계의 예외이다.
+    - JWKS·공개 헬스 체크는 일반 BFF 프록시 경계의 예외이다.
+    - 외부 Provider의 OIDC callback은 중계가 아니라 Passport BFF가 직접 처리하는 인증 경로다(`bffOidcCallback`).
 
   contact:
     name: Passport Team
@@ -1039,101 +1040,6 @@ paths:
           $ref: '#/components/responses/TooManyRequests'
         '503':
           $ref: '#/components/responses/IdpUnavailable'
-
-  /api/v1/auth/oidc/callback/{tenant_id}:
-    get:
-      operationId: oidcCallback
-      tags:
-      - OIDC
-      summary: 테넌트 OIDC Callback
-      description: |
-        Provider가 브라우저를 돌려보내는 Redirect URI다. 테넌트 관리자는 이 URI를 IdP 클라이언트에 등록한다(`OidcConfiguration.redirect_uri`).
-        테넌트별 경로는 다중 발급자 Mix-Up 방어에 쓴다(RFC 9700).
-
-        **검증**(하나라도 실패하면 로그인을 만들지 않는다)
-        1. `state`로 트랜잭션을 찾는다. 1회용이고 만료되지 않았어야 한다. 트랜잭션의 `tenant_id`가 경로와 같아야 한다(FR-OIDC-012).
-        2. `iss` 파라미터(RFC 9207)가 있으면 설정의 발급자와 같아야 한다.
-        3. 트랜잭션 시점의 설정 버전이 현재와 같고 설정이 `enabled`여야 한다(D-06).
-        4. PKCE verifier로 코드를 교환한다. ID Token의 서명(테넌트 설정의 JWKS), `iss`, `aud = client_id`, `nonce`, `exp`, `iat`를 검증한다(FR-OIDC-003).
-        5. 외부 Access Token을 쓰는 경우 공통 JWT 검증 엔진에서 테넌트 설정의 용도·audience 규칙으로 검증한다. JWT만 지원한다(FR-OIDC-009-01).
-
-        **처리**: 11장 F-03, F-04와 같다.
-
-        **응답**: 항상 `302`로 트랜잭션의 `return_to`에 이동한다. 결과는 URL 조각(`#`)의 파라미터로 전달한다.
-
-        | `oidc_result` | 추가 파라미터 | 의미 |
-        | --- | --- | --- |
-        | `logged_in` | `tenant_id` | Passport BFF가 토큰을 서버에 저장하고 세션 쿠키 설정(`intent = login`) |
-        | `link_required` | `link_ticket` | 같은 이메일의 기존 계정이 있다. 기존 계정 로그인 후 연결 |
-        | `link_ready` | `link_ticket` | 연결 준비 완료(`intent = link`) |
-        | `reauthenticated` | | 현재 로그인에 OIDC 재인증 기록(`intent = reauth`) |
-        | `error` | `error_code` | 실패. `error_code`: `access_denied`(사용자 취소), `invalid_response`, `membership_required`, `account_inactive`, `identity_already_linked`, `reauthentication_failed`, `oidc_configuration_unavailable`, `idp_status_unavailable`, `oidc_provider_error`, `transaction_expired` |
-
-        트랜잭션을 찾을 수 없어 `return_to`를 알 수 없으면 관리 포털의 기본 오류 화면으로 이동한다.
-      security: []
-      x-requirements:
-      - FR-OIDC-002
-      - FR-OIDC-003
-      - FR-OIDC-004
-      - FR-OIDC-005
-      - FR-OIDC-006
-      - FR-OIDC-007
-      - FR-OIDC-008
-      - FR-OIDC-009
-      - FR-OIDC-009-01
-      - FR-OIDC-012
-      - FR-OIDC-013
-      - FR-OIDC-014
-      - FR-OIDC-016
-      - FR-AUTH-008-02
-      - FR-AUTH-008-04
-      - FR-USER-006
-      - FR-MEM-008
-      - D-08
-      - SC-02
-      x-audit-event: auth.oidc_login_succeeded / auth.oidc_login_failed / user.created_from_oidc / membership.auto_provisioned
-      parameters:
-      - $ref: '#/components/parameters/TenantIdPath'
-      - name: state
-        in: query
-        required: true
-        schema:
-          type: string
-          maxLength: 256
-      - name: code
-        in: query
-        description: 성공 시 Authorization Code
-        schema:
-          type: string
-          maxLength: 2048
-      - name: iss
-        in: query
-        description: RFC 9207 발급자 식별자
-        schema:
-          type: string
-          format: uri
-      - name: error
-        in: query
-        description: Provider 오류 코드(예 `access_denied`)
-        schema:
-          type: string
-          maxLength: 256
-      - name: error_description
-        in: query
-        schema:
-          type: string
-          maxLength: 1024
-      responses:
-        '302':
-          description: '`return_to`(또는 기본 오류 화면)로 이동'
-          headers:
-            Location:
-              description: '예: `https://passport.example.com/login/callback#oidc_result=logged_in&tenant_id=0193a3c1-7c2e-7d11-9a40-5b1e2f3a4b5c`'
-              schema:
-                type: string
-                format: uri
-            Set-Cookie:
-              $ref: '#/components/headers/SetBffSessionCookie'
 
   /api/v1/users/me:
     get:
@@ -3733,6 +3639,106 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '503':
           $ref: '#/components/responses/TokenUnavailable'
+
+  /bff/auth/oidc/callback/{tenant_id}:
+    get:
+      operationId: bffOidcCallback
+      tags:
+      - BFF
+      - OIDC
+      summary: 테넌트 OIDC Callback
+      description: |
+        Passport BFF가 구현한다. Provider가 브라우저를 돌려보내는 Redirect URI다. 테넌트 관리자는 이 URI를 IdP 클라이언트에 등록한다(`OidcConfiguration.redirect_uri`).
+        세션 쿠키를 설정하므로 Bearer 전용인 `/api/v1`이 아니라 BFF에 둔다.
+        테넌트별 경로는 다중 발급자 Mix-Up 방어에 쓴다(RFC 9700).
+
+        **검증**(하나라도 실패하면 로그인을 만들지 않는다)
+        1. `state`로 트랜잭션을 찾는다. 1회용이고 만료되지 않았어야 한다. 트랜잭션의 `tenant_id`가 경로와 같아야 한다(FR-OIDC-012).
+        2. `iss` 파라미터(RFC 9207)가 있으면 설정의 발급자와 같아야 한다.
+        3. 트랜잭션 시점의 설정 버전이 현재와 같고 설정이 `enabled`여야 한다(D-06).
+        4. PKCE verifier로 코드를 교환한다. ID Token의 서명(테넌트 설정의 JWKS), `iss`, `aud = client_id`, `nonce`, `exp`, `iat`를 검증한다(FR-OIDC-003).
+        5. 외부 Access Token을 쓰는 경우 공통 JWT 검증 엔진에서 테넌트 설정의 용도·audience 규칙으로 검증한다. JWT만 지원한다(FR-OIDC-009-01).
+
+        **처리**: 11장 F-03, F-04와 같다.
+
+        **응답**: 항상 `302`로 트랜잭션의 `return_to`에 이동한다. 결과는 URL 조각(`#`)의 파라미터로 전달한다.
+
+        | `oidc_result` | 추가 파라미터 | 의미 |
+        | --- | --- | --- |
+        | `logged_in` | `tenant_id` | Passport BFF가 토큰을 서버에 저장하고 세션을 새로 생성·교체해 쿠키 설정(`intent = login`) |
+        | `link_required` | `link_ticket` | 같은 이메일의 기존 계정이 있다. 기존 계정 로그인 후 연결 |
+        | `link_ready` | `link_ticket` | 연결 준비 완료(`intent = link`) |
+        | `reauthenticated` | | 현재 로그인에 OIDC 재인증 기록(`intent = reauth`) |
+        | `error` | `error_code` | 실패. `error_code`: `access_denied`(사용자 취소), `invalid_response`, `membership_required`, `account_inactive`, `identity_already_linked`, `reauthentication_failed`, `oidc_configuration_unavailable`, `idp_status_unavailable`, `oidc_provider_error`, `transaction_expired` |
+
+        트랜잭션을 찾을 수 없어 `return_to`를 알 수 없으면 관리 포털의 기본 오류 화면으로 이동한다.
+      security: []
+      x-requirements:
+      - FR-OIDC-002
+      - FR-OIDC-003
+      - FR-OIDC-004
+      - FR-OIDC-005
+      - FR-OIDC-006
+      - FR-OIDC-007
+      - FR-OIDC-008
+      - FR-OIDC-009
+      - FR-OIDC-009-01
+      - FR-OIDC-012
+      - FR-OIDC-013
+      - FR-OIDC-014
+      - FR-OIDC-016
+      - FR-AUTH-008-02
+      - FR-AUTH-008-04
+      - FR-USER-006
+      - FR-MEM-008
+      - D-08
+      - SC-02
+      - ADR-014
+      - FR-AUTH-009-02-01
+      - D-03
+      x-audit-event: auth.oidc_login_succeeded / auth.oidc_login_failed / user.created_from_oidc / membership.auto_provisioned
+      parameters:
+      - $ref: '#/components/parameters/TenantIdPath'
+      - name: state
+        in: query
+        required: true
+        schema:
+          type: string
+          maxLength: 256
+      - name: code
+        in: query
+        description: 성공 시 Authorization Code
+        schema:
+          type: string
+          maxLength: 2048
+      - name: iss
+        in: query
+        description: RFC 9207 발급자 식별자
+        schema:
+          type: string
+          format: uri
+      - name: error
+        in: query
+        description: Provider 오류 코드(예 `access_denied`)
+        schema:
+          type: string
+          maxLength: 256
+      - name: error_description
+        in: query
+        schema:
+          type: string
+          maxLength: 1024
+      responses:
+        '302':
+          description: '`return_to`(또는 기본 오류 화면)로 이동'
+          headers:
+            Location:
+              description: '예: `https://passport.example.com/login/callback#oidc_result=logged_in&tenant_id=0193a3c1-7c2e-7d11-9a40-5b1e2f3a4b5c`'
+              schema:
+                type: string
+                format: uri
+            Set-Cookie:
+              $ref: '#/components/headers/SetBffSessionCookie'
 
   /bff/auth/login:
     servers:
@@ -8278,7 +8284,7 @@ components:
         authorization_url:
           type: string
           format: uri
-          examples: ['https://idp.acme.example/realms/acme/protocol/openid-connect/auth?response_type=code&client_id=passport&redirect_uri=https%3A%2F%2Fpassport.example.com%2Fapi%2Fv1%2Fauth%2Foidc%2Fcallback%2F0193a3c1-7c2e-7d11-9a40-5b1e2f3a4b5c&scope=openid%20email%20profile&state=st_x&nonce=n_y&code_challenge=cc_z&code_challenge_method=S256']
+          examples: ['https://idp.acme.example/realms/acme/protocol/openid-connect/auth?response_type=code&client_id=passport&redirect_uri=https%3A%2F%2Fpassport.example.com%2Fbff%2Fauth%2Foidc%2Fcallback%2F0193a3c1-7c2e-7d11-9a40-5b1e2f3a4b5c&scope=openid%20email%20profile&state=st_x&nonce=n_y&code_challenge=cc_z&code_challenge_method=S256']
         expires_at:
           $ref: '#/components/schemas/Timestamp'
 
@@ -8849,7 +8855,7 @@ components:
           type: string
           format: uri
           readOnly: true
-          description: IdP 클라이언트에 등록할 Redirect URI(`/api/v1/auth/oidc/callback/{tenant_id}`)
+          description: IdP 클라이언트에 등록할 Redirect URI(`/bff/auth/oidc/callback/{tenant_id}`)
         trust_version:
           type: integer
           minimum: 1
