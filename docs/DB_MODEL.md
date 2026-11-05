@@ -7,19 +7,21 @@ Phase 2의 ORM(`passport/db/models/`)과 초기 Alembic 마이그레이션은 �
 
 **2026-11-02 확정 반영:** Python IntEnum·smallint 저장, 사전 등록 이메일의 활성화·취소 즉시 삭제, 외부 로그아웃·철회의 정확한 대상 매핑, 외부 보안 변경 기록의 저장 성공 후 완료 응답, 탈퇴 완료 확인 키 24시간을 적용한다.
 
+**2026-11-05 탈퇴 정책 변경:** 탈퇴 시 `users` 행과 직접·간접 FK 자손을 같은 트랜잭션에서 물리 삭제한다. 개인정보 추가 보관과 탈퇴자 개인정보 조회는 제공하지 않으며 `audit_logs`는 보존한다. 사용자 FK가 없는 완료 확인·동기화·복원용 운영 기록은 개인정보 값 없이 각 보존 정책을 따른다.
+
 ## 1. 공통 규약
 
 | 항목 | 규약 |
 | --- | --- |
 | DBMS | PostgreSQL 18, 스키마 `public` |
 | 테이블 이름 | 복수형 snake_case(`users`, `tenant_memberships`). PostgreSQL 예약어 `user`를 피한다 |
-| 기본 키 | `id uuid`. 값은 애플리케이션에서 `uuid.uuid7()`로 만든다. 시간순이라 인덱스 지역성이 좋고 계약의 ID 예시 형식과 같다. 1:1 확장 테이블은 부모 키를 PK로 쓴다 |
+| 기본 키 | 기본 `id uuid`, `users`는 `user_id uuid`. 값은 애플리케이션에서 `uuid.uuid7()`로 만든다. 시간순이라 인덱스 지역성이 좋고 계약의 ID 예시 형식과 같다. 1:1 확장 테이블은 부모 키를 PK로 쓴다 |
 | 시각 | `timestamptz`, UTC. `created_at`·`updated_at`의 기본값은 `now()` |
 | 열거 값 | Python `enum.IntEnum`의 명시적 정수 키(`.value`)를 PostgreSQL `smallint`에 저장한다. 이름 있는 CHECK로 허용 키를 제한한다(1.1절) |
 | ETag | 변경 가능 리소스는 `version integer NOT NULL DEFAULT 1`. SQLAlchemy `version_id_col`로 매핑해 `UPDATE … WHERE version = :expected`가 되게 한다. ETag는 `"{version}"` |
 | 접근 자격 버전 | `access_version bigint NOT NULL DEFAULT 1`. `tenants`, `tenant_memberships`, `tenant_applications`에만 둔다(FR-APP-008-05). `version`과 별개다 |
-| 이메일 | 소문자 정규화 값만 저장한다(계약 `Email`). CHECK `email = lower(email)` |
-| FK 삭제 동작 | 기본 `RESTRICT`. 부모 없이 의미 없는 자식만 `CASCADE`이며 표에 적는다 |
+| 이메일 | 소문자 정규화 값만 저장한다(계약 `Email`). `user_email`에는 CHECK `user_email = lower(user_email)`을 적용한다. 사전 등록 이메일도 같은 정규화를 적용한다 |
+| FK 삭제 동작 | 기본 `RESTRICT`. `users`를 참조하는 모든 FK와 그 자손으로 내려가는 FK는 `ON DELETE CASCADE`이며 표에 적는다. 공유 부모인 테넌트·서비스·OIDC 설정은 삭제하지 않는다. `audit_logs`에는 FK를 두지 않는다 |
 | 표 읽는 법 | "NULL" 열이 `예`인 열만 NULL을 허용한다. "공통 열"은 `created_at`, `updated_at`, `version` 세 개다 |
 
 ### 1.1 Python Enum과 정수 키
@@ -34,8 +36,7 @@ Phase 2의 ORM(`passport/db/models/`)과 초기 Alembic 마이그레이션은 �
 
 | Python IntEnum | 적용 컬럼 | 키 = 외부 명칭 |
 | --- | --- | --- |
-| `UserStatus` | `users.user_status` | `1=pending_verification`, `2=active`, `3=suspended`, `4=deactivated`, `5=deleted` |
-| `AvatarContentType` | `user_avatars.content_type` | `1=image/png`, `2=image/jpeg`, `3=image/webp` |
+| `UserStatus` | `users.user_status` | `1=pending_verification`, `2=active`, `3=suspended`, `4=deactivated` |
 | `TenantStatus` | `tenants.tenant_status` | `1=active`, `2=suspended`, `3=deactivated` |
 | `ApplicationStatus` | `applications.status`, `tenant_applications.status` | `1=active`, `2=inactive` |
 | `OidcProviderType` | `tenant_oidc_configurations.provider_type` | `1=keycloak`, `2=auth0` |
@@ -45,7 +46,7 @@ Phase 2의 ORM(`passport/db/models/`)과 초기 Alembic 마이그레이션은 �
 | `OidcValidationError` | `tenant_oidc_configurations.last_validation_error_code` | `1=discovery_unreachable`, `2=issuer_mismatch`, `3=jwks_unreachable`, `4=invalid_client`, `5=unsupported_lifecycle_binding` |
 | `TenantRole` | `tenant_memberships.role` | `1=admin`, `2=member` |
 | `MembershipStatus` | `tenant_memberships.membership_status` | `1=pre_registered`, `2=active`, `3=suspended`, `4=removed` |
-| `MembershipRemovalReason` | `tenant_memberships.removed_reason` | `1=admin_removed`, `2=pre_registration_cancelled`, `3=withdrawal` |
+| `MembershipRemovalReason` | `tenant_memberships.removed_reason` | `1=admin_removed`, `2=pre_registration_cancelled` |
 | `TotpStatus` | `totp_credentials.status` | `1=pending`, `2=active` |
 | `MfaResetStatus` | `mfa_reset_requests.status` | `1=pending`, `2=approved`, `3=rejected`, `4=expired` |
 | `AdminRole` | `mfa_reset_requests.decided_as` | `1=tenant_admin`, `2=platform_admin` |
@@ -53,7 +54,7 @@ Phase 2의 ORM(`passport/db/models/`)과 초기 Alembic 마이그레이션은 �
 | `AuthenticationMethod` | `logins.auth_method` | `1=local`, `2=oidc` |
 | `ClientType` | `logins.client_type` | `1=web`, `2=native` |
 | `ReauthenticationMethod` | `logins.reauth_method` | `1=password`, `2=oidc` |
-| `LoginEndReason` | `logins.end_reason` | `1=logout`, `2=logout_all`, `3=password_changed`, `4=account_inactive`, `5=refresh_reuse`, `6=oidc_trust_changed`, `7=external_account_blocked`, `8=provider_logout`, `9=external_token_revoked`, `10=withdrawal`, `11=restore` |
+| `LoginEndReason` | `logins.end_reason` | `1=logout`, `2=logout_all`, `3=password_changed`, `4=account_inactive`, `5=refresh_reuse`, `6=oidc_trust_changed`, `7=external_account_blocked`, `8=provider_logout`, `9=external_token_revoked`, `11=restore` |
 | `OidcBindingKind` | `oidc_login_bindings.kind` | `1=session`, `2=token` |
 | `MfaMethod` | `login_mfa.method` | `1=totp`, `2=external` |
 | `SigningAlgorithm` | `signing_keys.alg` | `1=ES256` |
@@ -62,10 +63,10 @@ Phase 2의 ORM(`passport/db/models/`)과 초기 Alembic 마이그레이션은 �
 | `AccessScope` | `access_version_syncs.scope` | `1=tenant`, `2=membership`, `3=tenant_application` |
 | `AuditResult` | `audit_logs.result` | `1=success`, `2=failure` |
 | `AuditActorType` | `audit_logs.actor_type` | `1=user`, `2=platform_admin`, `3=application`, `4=system` |
-| `AuditTargetType` | `audit_logs.target_type` | `1=user`, `2=tenant`, `3=tenant_membership`, `4=application`, `5=tenant_application`, `6=tenant_oidc_configuration`, `7=login`, `8=identity`, `9=totp_credential`, `10=mfa_reset_request`, `11=user_avatar`, `12=user_profile`, `13=retained_profile` |
+| `AuditTargetType` | `audit_logs.target_type` | `1=user`, `2=tenant`, `3=tenant_membership`, `4=application`, `5=tenant_application`, `6=tenant_oidc_configuration`, `7=login`, `8=identity`, `9=totp_credential`, `10=mfa_reset_request`, `12=user_profile` |
 | `AuditAction` | `audit_logs.action` | 아래 `AuditAction` 키 표 |
 
-`AuditAction`의 키는 현재 API 계약에 있는 이벤트를 아래처럼 고정한다. 계약에 새 이벤트나 서버 내부 이벤트를 추가할 때 기존 키를 유지하고 새 키를 명시 배정한다.
+`AuditAction`의 키는 현재 API 계약에 있는 이벤트를 아래처럼 고정한다. 폐기한 `UserStatus` 키 `5`, `MembershipRemovalReason` 키 `3`, `LoginEndReason` 키 `10`, `AuditAction` 키 `9`·`10`·`31`, `AuditTargetType` 키 `11`·`13`은 재사용하지 않는다. 계약에 새 이벤트나 서버 내부 이벤트를 추가할 때 기존 키를 유지하고 새 키를 명시 배정한다.
 
 | 키 | 이벤트 명칭 |
 | --- | --- |
@@ -77,8 +78,6 @@ Phase 2의 ORM(`passport/db/models/`)과 초기 Alembic 마이그레이션은 �
 | `6` | `auth.logout_all` |
 | `7` | `auth.reauthenticated` |
 | `8` | `user.profile_updated` |
-| `9` | `user.avatar_updated` |
-| `10` | `user.avatar_deleted` |
 | `11` | `user.password_changed` |
 | `12` | `user.withdrawal_completion_retried` |
 | `13` | `user.withdrawn` |
@@ -99,7 +98,6 @@ Phase 2의 ORM(`passport/db/models/`)과 초기 Alembic 마이그레이션은 �
 | `28` | `membership.removed` |
 | `29` | `mfa.reset_approved` |
 | `30` | `mfa.reset_rejected` |
-| `31` | `user.retained_profile_accessed` |
 | `32` | `tenant_application.changed` |
 | `33` | `admin.tenants_listed` |
 | `34` | `tenant.status_changed` |
@@ -145,12 +143,8 @@ Access Token은 저장하지 않는다. 철회는 `sid`(= `logins.id`)의 상태
 
 ```mermaid
 erDiagram
-    USERS ||--o| USER_PROFILES : has
-    USERS ||--o| CREDENTIALS : local_password
-    USERS ||--o| USER_AVATARS : avatar
     USERS ||--o{ IDENTITIES : external_identity
     USERS ||--o{ EMAIL_VERIFICATION_TOKENS : verifies
-    USERS ||--o| RETAINED_PROFILES : retained_after_withdrawal
     USERS |o--o{ TENANT_MEMBERSHIPS : belongs_to
     TENANTS ||--o{ TENANT_MEMBERSHIPS : has
     TENANTS ||--o| TENANT_OIDC_CONFIGURATIONS : configures
@@ -193,83 +187,49 @@ erDiagram
 
 #### `users`
 
-**목적:** Passport 전체에서 사용자의 불변 식별자와 계정 상태를 관리한다.
+**목적:** Passport 전체에서 사용자의 불변 식별자·계정 상태·프로필과 Local 비밀번호 인증 정보를 관리한다.
 
-**역할:** Local·OIDC 인증 수단과 테넌트 멤버십이 공통으로 참조하는 계정의 기준점이다. 탈퇴 후에도 개인정보 없이 사용자 ID를 남겨 멤버십·감사 기록의 참조를 유지한다.
+**역할:** Local·OIDC 인증 수단과 테넌트 멤버십이 공통으로 참조하는 계정의 기준점이며, 로그인·재인증·비밀번호 변경·프로필 수정과 역할·테넌트별 개인정보 조회에 사용한다. 탈퇴 시 이 행과 직접·간접 FK 자손을 물리 삭제한다. 탈퇴 시각과 기존 사용자 ID는 개인정보 값 없이 `audit_logs` 및 복원용 보안 기록에 기록하며 사용자 ID는 재사용하지 않는다.
 
 | 컬럼 | 형식 | NULL | 기본값 | 설명 |
 | --- | --- | --- | --- | --- |
-| `id` | uuid | | UUIDv7 | `user_id` |
-| `user_status` | smallint | | `1` | `UserStatus`. `pending_verification`, `active`, `suspended`, `deactivated`, `deleted` |
+| `user_id` | uuid | | UUIDv7 | PK. 생성 후 변경·재사용하지 않는 식별자 |
+| `user_status` | smallint | | `1` | `UserStatus`. `pending_verification`, `active`, `suspended`, `deactivated` |
+| `is_system` | boolean | | `false` | 시스템 계정 여부
 | `is_platform_admin` | boolean | | `false` | P0는 설치 CLI로만 지정한다. 계약의 `platform_roles`로 변환 |
-| `withdrawn_at` | timestamptz | 예 | | 탈퇴 시각 |
-| 공통 열 | | | | |
-
-- CHECK `ck_users_user_status_enum`, CHECK `ck_users_withdrawn`: `(user_status = 5) = (withdrawn_at IS NOT NULL)`
-
-#### `user_profiles`
-
-**목적:** 사용자의 프로필과 연락처 등 개인정보를 계정 식별 정보·인증 수단과 분리하여 보관한다.
-
-**역할:** 본인 프로필 수정과 역할·테넌트별 개인정보 조회에 사용한다. 탈퇴 시 허용된 보관 항목만 `retained_profiles`로 옮기고 원 프로필 행을 삭제한다.
-
-| 컬럼 | 형식 | NULL | 기본값 | 설명 |
-| --- | --- | --- | --- | --- |
-| `user_id` | uuid | | | PK, FK `users` `CASCADE` |
-| `email` | varchar(254) | | | 정규화 값 |
+| `user_email` | varchar(254) | | | 정규화 값. 필수. API의 `email`로 매핑 |
+| `display_name` | varchar(50) | | | 필수 |
+| `fist_name` | varchar(50) | 예 | | 선택 실명 항목인 이름. 요청한 컬럼명을 그대로 사용한다 |
+| `last_name` | varchar(50) | 예 | | 선택 실명 항목인 성 |
+| `password_hash` | text | 예 | | Local 비밀번호의 Argon2id PHC 문자열. Local 인증 수단이 없으면 NULL |
+| `password_changed_at` | timestamptz | 예 | | Local 비밀번호 설정·변경 시각. Local 인증 수단이 없으면 NULL |
 | `email_verified_at` | timestamptz | 예 | | Local은 확인 시각. OIDC는 Provider가 `email_verified = true`를 준 시각 |
-| `display_name` | varchar(50) | | | |
-| `phone` | varchar(16) | 예 | | E.164 |
-| `real_name` | varchar(100) | 예 | | |
-| 공통 열 | | | | `version`은 `getMe`·`updateMe`의 ETag |
+| `created_at` | timestamptz | 예 | | 생성 시각 |
+| `updated_at` | timestamptz | 예 | | 수정 시각 |
+| `external_id` | varchar(50) | 예 | | 외부 서비스 연결용 식별값 |
+| `external_source` | varchar(50) | 예 | 외부 서비스 연결용 식별값이 보관된 곳 |
+| 공통 열 | | | | `version`은 프로필·계정 상태 변경이 공유하는 ETag이며 `getMe`·`updateMe`에도 사용한다 |
 
-- UNIQUE `email`. Local 로그인 식별자이고(FR-AUTH-001), 같은 이메일로 계정을 새로 만들지 않는다(D-08). 외부 신원 연결 판단에는 쓰지 않는다(6장 모델링 주의).
-- CHECK `ck_user_profiles_email_lower`
-- **[제안]** `pg_trgm` GIN 인덱스: `email`, `display_name`. `adminSearchUsers`는 100만 사용자에 대한 부분 일치 검색이다. 테넌트 안 검색은 멤버십으로 먼저 좁히므로 필요 없다.
-
-#### `credentials`
-
-**목적:** Local 인증에 필요한 사용자별 비밀번호 해시와 변경 시각을 보관한다.
-
-**역할:** Local 로그인·비밀번호 재인증·비밀번호 변경에서 자격 증명을 검증하고 갱신하는 기준이다. 비밀번호 원문 대신 적응형 해시를 저장하여 프로필 정보와 별도로 보호한다.
-
-| 컬럼 | 형식 | NULL | 기본값 | 설명 |
-| --- | --- | --- | --- | --- |
-| `user_id` | uuid | | | PK, FK `users` `CASCADE` |
-| `password_hash` | text | | | Argon2id PHC 문자열 |
-| `password_changed_at` | timestamptz | | `now()` | |
-| `created_at`, `updated_at` | | | | |
-
-OIDC로만 가입한 사용자는 행이 없다. 이때 비밀번호 API는 `409 local_credential_not_set`이다.
-
-#### `user_avatars`
-
-**목적:** 사용자별 현재 프로필 사진의 이미지 데이터와 공개 조회 식별자를 관리한다.
-
-**역할:** 프로필 사진의 업로드·조회·교체·삭제를 지원한다. 프로필 정보와 이미지 데이터를 분리하고 공개 `avatar_id`로 사진을 제공한다.
-
-| 컬럼 | 형식 | NULL | 기본값 | 설명 |
-| --- | --- | --- | --- | --- |
-| `id` | varchar(32) | | 무작위 128비트 base64url | 공개 `avatar_id`(`getAvatar` URL) |
-| `user_id` | uuid | | | FK `users`, UNIQUE |
-| `content_type` | smallint | | | `AvatarContentType`. `image/png`, `image/jpeg`, `image/webp` |
-| `data` | bytea | | | 메타데이터를 제거하고 다시 인코딩한 이미지 |
-| `created_at` | timestamptz | | `now()` | |
-
-- CHECK `ck_user_avatars_content_type_enum`, CHECK `ck_user_avatars_size`: `octet_length(data) <= 2097152`
-- **[제안]** 이미지는 DB에 저장한다. 단일 패키지 설치에 별도 파일 저장소가 필요 없다.
-- 교체는 삭제 후 새 ID로 삽입한다. 그래서 이전 URL이 즉시 무효가 된다.
+- CHECK `ck_users_user_status_enum`
+- UNIQUE `uq_users_user_email` (`user_email`). Local 로그인 식별자이고(FR-AUTH-001), 같은 이메일로 계정을 새로 만들지 않는다(D-08). 외부 신원 연결 판단에는 쓰지 않는다. 탈퇴 시 행이 삭제되므로 같은 이메일로 다시 가입할 수 있으며 새 사용자 ID를 발급한다.
+- CHECK `ck_users_user_email_lower`: `user_email = lower(user_email)`
+- CHECK `ck_users_local_password`: `(password_hash IS NULL) = (password_changed_at IS NULL)`
+- Local 가입 시 두 비밀번호 열을 함께 설정하고 `password_changed_at`에는 현재 시각을 넣는다. OIDC로만 가입한 사용자는 둘 다 NULL이다. `password_hash IS NULL`이면 비밀번호 API는 `409 local_credential_not_set`이다.
+- 비밀번호 변경은 두 비밀번호 열 갱신과 사용자의 모든 로그인 종료를 같은 트랜잭션에서 처리한다. 비밀번호 해시·변경 시각은 사용자 API 응답에 포함하지 않는다.
+- 개인정보 조회·변경 DTO는 인증 비밀값을 제외하고 역할·테넌트별 허용 필드만 명시적으로 매핑한다(FR-USER-007). 삭제된 사용자는 일반·관리자 조회에서 찾을 수 없으며 탈퇴자 개인정보 조회 경로도 제공하지 않는다.
+- `fist_name`·`last_name`은 각각 선택 항목이며 기존 실명 열람 권한을 적용한다. 전화번호는 현재 수집·저장·반환하지 않는다.
+- **[제안]** `pg_trgm` GIN 인덱스: `user_email`, `display_name`. `adminSearchUsers`는 100만 사용자에 대한 부분 일치 검색이다. 테넌트 안 검색은 멤버십으로 먼저 좁히므로 필요 없다.
 
 #### `identities`
 
 **목적:** 외부 OIDC 신원인 `(issuer, subject)`를 Passport 사용자 계정에 연결한다.
 
-**역할:** 외부 인증 결과를 전역 사용자로 매핑하고 연결에 사용한 테넌트·OIDC 설정과 사용 이력을 관리한다. Local 인증 수단은 `credentials`가 담당하며 `listMyIdentities`는 두 정보를 합쳐 반환한다.
+**역할:** 외부 인증 결과를 전역 사용자로 매핑하고 연결에 사용한 테넌트·OIDC 설정과 사용 이력을 관리한다. Local 인증 수단은 `users.password_hash`의 존재로 판단하며 `listMyIdentities`는 이 여부와 외부 신원 목록을 합쳐 반환한다. 비밀번호 해시는 반환하지 않는다.
 
 | 컬럼 | 형식 | NULL | 기본값 | 설명 |
 | --- | --- | --- | --- | --- |
 | `id` | uuid | | UUIDv7 | `identity_id` |
-| `user_id` | uuid | | | FK `users` |
+| `user_id` | uuid | | | FK `users` `CASCADE` |
 | `issuer` | varchar(2048) | | | |
 | `subject` | varchar(255) | | | |
 | `tenant_id` | uuid | | | FK `tenants`. 연결에 쓴 테넌트 |
@@ -289,7 +249,7 @@ OIDC로만 가입한 사용자는 행이 없다. 이때 비밀번호 API는 `409
 | 컬럼 | 형식 | NULL | 기본값 | 설명 |
 | --- | --- | --- | --- | --- |
 | `id` | uuid | | UUIDv7 | |
-| `user_id` | uuid | | | FK `users` |
+| `user_id` | uuid | | | FK `users` `CASCADE` |
 | `token_hash` | bytea | | | UNIQUE |
 | `expires_at` | timestamptz | | | **[제안]** 발급 후 24시간 |
 | `consumed_at` | timestamptz | 예 | | |
@@ -297,25 +257,6 @@ OIDC로만 가입한 사용자는 행이 없다. 이때 비밀번호 API는 `409
 
 - 인덱스 `user_id`
 - **[제안]** 재발송하면 그 사용자의 미사용 토큰을 지우고 새로 발급한다.
-
-#### `retained_profiles`
-
-**목적:** 탈퇴 후 허용된 추가 보관 기간 동안 고객 문의·분쟁 대응·보안 사고·부정 이용 조사에 필요한 개인정보를 보관한다(FR-USER-005, 005-01).
-
-**역할:** 일반 프로필과 구분하여 승인된 목적의 관리자 열람과 보관 만료 후 삭제를 지원한다. 이메일·표시 이름·전화번호·실명만 대상으로 하며 프로필 사진은 보관하지 않는다.
-
-| 컬럼 | 형식 | NULL | 기본값 | 설명 |
-| --- | --- | --- | --- | --- |
-| `user_id` | uuid | | | PK, FK `users` |
-| `email` | varchar(254) | | | |
-| `display_name` | varchar(50) | | | |
-| `phone` | varchar(16) | 예 | | |
-| `real_name` | varchar(100) | 예 | | |
-| `withdrawn_at` | timestamptz | | | |
-| `retention_expires_at` | timestamptz | | | `withdrawn_at` + 24시간 |
-
-- 인덱스 `retention_expires_at`(삭제 작업)
-- 탈퇴 시점 소속 테넌트는 `tenant_memberships`의 `removed_reason = 3`(`MembershipRemovalReason.WITHDRAWAL`) 행으로 찾는다. 별도 테이블이 필요 없다.
 
 ### 4.2 테넌트
 
@@ -378,14 +319,14 @@ OIDC로만 가입한 사용자는 행이 없다. 이때 비밀번호 API는 `409
 | --- | --- | --- | --- | --- |
 | `id` | uuid | | UUIDv7 | `membership_id` |
 | `tenant_id` | uuid | | | FK `tenants` |
-| `user_id` | uuid | 예 | | FK `users`. `pre_registered`면 NULL |
+| `user_id` | uuid | 예 | | FK `users` `CASCADE`. `pre_registered`면 NULL |
 | `pre_registered_email` | varchar(254) | 예 | | 사전 등록 이메일(정규화). `pre_registered` 동안만 보관하며 활성화·취소 즉시 NULL로 바꾼다 |
 | `role` | smallint | | `2` | `TenantRole`. `admin`, `member` |
 | `membership_status` | smallint | | | `MembershipStatus`. `pre_registered`, `active`, `suspended`, `removed` |
 | `access_version` | bigint | | `1` | 상태·역할 변경마다 1 증가 |
 | `joined_at` | timestamptz | 예 | | 처음 `active`가 된 시각 |
 | `removed_at` | timestamptz | 예 | | |
-| `removed_reason` | smallint | 예 | | `MembershipRemovalReason`. `admin_removed`, `pre_registration_cancelled`, `withdrawal` |
+| `removed_reason` | smallint | 예 | | `MembershipRemovalReason`. `admin_removed`, `pre_registration_cancelled` |
 | 공통 열 | | | | |
 
 - CHECK `ck_tenant_memberships_state`:
@@ -395,7 +336,7 @@ OIDC로만 가입한 사용자는 행이 없다. 이때 비밀번호 API는 `409
 - 부분 UNIQUE `uq_tenant_memberships_tenant_user` (`tenant_id`, `user_id`) `WHERE membership_status <> 4`: 중복 소속 방지(FR-MEM-005)
 - 부분 UNIQUE `uq_tenant_memberships_tenant_email` (`tenant_id`, `pre_registered_email`) `WHERE membership_status = 1`
 - 인덱스 `user_id`(`listMyTenants`), (`tenant_id`, `membership_status`)
-- `removed` 행은 지우지 않는다. 감사와 P1 재가입 판단에 쓴다(FR-MEM-008). 재가입은 새 행이다.
+- 계정이 존재하는 동안 `removed` 행은 감사와 P1 재가입 판단을 위해 보존한다(FR-MEM-008). 계정 탈퇴 시에는 과거 `removed` 행을 포함한 모든 소속 행을 FK 연쇄 삭제한다. 관리자 해지 후 재가입은 새 행이다.
 
 ### 4.3 서비스
 
@@ -449,7 +390,7 @@ OIDC로만 가입한 사용자는 행이 없다. 이때 비밀번호 API는 `409
 | 컬럼 | 형식 | NULL | 기본값 | 설명 |
 | --- | --- | --- | --- | --- |
 | `id` | uuid | | UUIDv7 | |
-| `membership_id` | uuid | | | FK `tenant_memberships`, UNIQUE |
+| `membership_id` | uuid | | | FK `tenant_memberships` `CASCADE`, UNIQUE |
 | `secret_ciphertext` | bytea | | | 암호문 |
 | `status` | smallint | | | `TotpStatus`. `pending`, `active` |
 | `pending_expires_at` | timestamptz | 예 | | `pending`일 때만. **[제안]** 등록 시작 후 10분 |
@@ -489,18 +430,19 @@ OIDC로만 가입한 사용자는 행이 없다. 이때 비밀번호 API는 `409
 | --- | --- | --- | --- | --- |
 | `id` | uuid | | UUIDv7 | `request_id` |
 | `tenant_id` | uuid | | | FK `tenants` |
-| `user_id` | uuid | | | FK `users` |
+| `user_id` | uuid | | | FK `users` `CASCADE` |
 | `status` | smallint | | `1` | `MfaResetStatus`. `pending`, `approved`, `rejected`, `expired` |
 | `note` | varchar(500) | 예 | | 사용자 메모 |
 | `expires_at` | timestamptz | | | **[제안]** 생성 후 72시간 |
 | `decided_at` | timestamptz | 예 | | |
-| `decided_by` | uuid | 예 | | FK `users` |
+| `decided_by` | uuid | 예 | | FK `users` `CASCADE` |
 | `decided_as` | smallint | 예 | | `AdminRole`. `tenant_admin`, `platform_admin` |
 | `verification_method` | smallint | 예 | | `VerificationMethod`. `organization_contact`, `in_person`, `other` |
 | `verification_note` | varchar(500) | 예 | | |
 | `decision_reason` | varchar(500) | 예 | | |
 | `created_at` | timestamptz | | `now()` | |
 
+- 대상 사용자(`user_id`) 또는 처리자(`decided_by`)가 탈퇴하면 해당 요청 행을 연쇄 삭제한다. 처리자 탈퇴는 다른 사용자에 대해 처리한 요청에도 적용하며 처리 사실의 감사 기록은 `audit_logs`에 남는다.
 - CHECK `ck_mfa_reset_requests_decision`: `(status IN (2, 3)) = (decided_at IS NOT NULL AND decided_by IS NOT NULL AND decision_reason IS NOT NULL)`
 - CHECK `ck_mfa_reset_requests_verification`: `status <> 2 OR verification_method IS NOT NULL`
 - 부분 UNIQUE `uq_mfa_reset_requests_pending` (`tenant_id`, `user_id`) `WHERE status = 1`: 대기 요청은 하나다(계약상 기존 요청을 반환)
@@ -517,7 +459,7 @@ OIDC로만 가입한 사용자는 행이 없다. 이때 비밀번호 API는 `409
 | 컬럼 | 형식 | NULL | 기본값 | 설명 |
 | --- | --- | --- | --- | --- |
 | `id` | uuid | | UUIDv7 | `sid`, `login_id` |
-| `user_id` | uuid | | | FK `users` |
+| `user_id` | uuid | | | FK `users` `CASCADE` |
 | `auth_method` | smallint | | | `AuthenticationMethod`. `local`, `oidc` |
 | `client_type` | smallint | | | `ClientType`. `web`, `native` |
 | `authenticated_at` | timestamptz | | | `auth_time` |
@@ -526,7 +468,7 @@ OIDC로만 가입한 사용자는 행이 없다. 이때 비밀번호 API는 `409
 | `tenant_id` | uuid | 예 | | FK `tenants`. OIDC 로그인의 대상 테넌트 |
 | `oidc_config_id` | uuid | 예 | | FK `tenant_oidc_configurations` |
 | `oidc_trust_version` | integer | 예 | | 로그인 시점의 `trust_version` |
-| `identity_id` | uuid | 예 | | FK `identities` `SET NULL` |
+| `identity_id` | uuid | 예 | | FK `identities` `CASCADE` |
 | `reauthenticated_at` | timestamptz | | | 최근 재인증. 로그인 시각으로 시작한다 |
 | `reauth_method` | smallint | | | `ReauthenticationMethod`. `password`, `oidc` |
 | `ended_at` | timestamptz | 예 | | |
@@ -537,7 +479,7 @@ OIDC로만 가입한 사용자는 행이 없다. 이때 비밀번호 API는 `409
 - CHECK `ck_logins_ended`: `(ended_at IS NULL) = (end_reason IS NULL)`
 - 부분 인덱스 `WHERE ended_at IS NULL`: `user_id`(전체 로그아웃·계정 차단), `oidc_config_id`(신뢰 변경), `identity_id`(외부 계정 차단·Provider 로그아웃)
 - 인덱스 `expires_at`(정리 작업)
-- Passport API와 `verifyAccess`는 요청마다 PK로 이 행을 읽는다. OIDC 로그인은 `oidc_trust_version`을 현재 설정과 비교한다.
+- Passport API와 `verifyAccess`는 요청마다 PK로 이 행과 사용자 존재 여부를 확인하며 사용자 또는 로그인 행이 없으면 기존 토큰을 거부한다. OIDC 로그인은 `oidc_trust_version`을 현재 설정과 비교한다.
 - **[제안]** `last_activity_at`은 1분 단위로만 갱신해 쓰기를 줄인다.
 
 #### `oidc_login_bindings`
@@ -710,7 +652,7 @@ OIDC로만 가입한 사용자는 행이 없다. 이때 비밀번호 API는 `409
 | `code_challenge` | varchar(128) | | | S256 |
 | `expires_at` | timestamptz | | | **[제안]** 발급 후 60초 |
 | `consumed_at` | timestamptz | 예 | | |
-| `refresh_family_id` | uuid | 예 | | FK `refresh_token_families` `SET NULL`. 교환으로 만든 계열. 코드가 다시 오면 이 계열을 폐기한다 |
+| `refresh_family_id` | uuid | 예 | | FK `refresh_token_families` `CASCADE`. 교환으로 만든 계열. 코드가 다시 오면 이 계열을 폐기한다 |
 | `created_at` | timestamptz | | `now()` | |
 
 ### 4.7 운영
@@ -808,7 +750,7 @@ OIDC로만 가입한 사용자는 행이 없다. 이때 비밀번호 API는 `409
 | `target_id` | varchar(64) | 예 | | |
 | `request_id` | varchar(128) | 예 | | `X-Request-ID` |
 | `source_ip` | inet | 예 | | **[제안]** |
-| `reason` | varchar(500) | 예 | | 관리자 사유, 보관 정보 열람 목적·사유 |
+| `reason` | varchar(500) | 예 | | 관리자 작업·조회 사유 |
 | `details` | jsonb | | `{}` | 비밀값·민감 개인정보 금지 |
 
 - 인덱스 `occurred_at`(보존 기간 삭제), (`tenant_id`, `occurred_at`)
@@ -822,7 +764,7 @@ OIDC로만 가입한 사용자는 행이 없다. 이때 비밀번호 API는 `409
 | --- | --- | --- |
 | `pending_verification` → `active` | 이메일 확인 | OIDC로 만든 계정은 `active`로 시작한다 |
 | `active`, `suspended`, `deactivated` 사이 | 플랫폼 관리자(`updateUserStatus`) | `active`가 아니게 되면 그 사용자의 모든 로그인 종료(`account_inactive`) |
-| 그 외 모든 상태 → `deleted` | 본인 탈퇴 | 9.2절. 종착 상태 |
+| 모든 상태 → 행 삭제 | 본인 탈퇴 | 9.2절. 계정과 모든 FK 자손을 물리 삭제한다 |
 
 ### 5.2 멤버십(`tenant_memberships.membership_status`)
 
@@ -832,7 +774,8 @@ OIDC로만 가입한 사용자는 행이 없다. 이때 비밀번호 API는 `409
 | `pre_registered` → `active` | 같은 이메일 사용자의 첫 토큰 요청, 이 테넌트 OIDC 로그인 |
 | 없음 → `active` | 테넌트 생성자(`admin`), OIDC 자동 등록(`member`) |
 | `active` ↔ `suspended` | 테넌트 관리자 |
-| `pre_registered`, `active`, `suspended` → `removed` | 테넌트 관리자 해지·사전 등록 취소, 본인 탈퇴. 종착 상태 |
+| `pre_registered`, `active`, `suspended` → `removed` | 테넌트 관리자 해지·사전 등록 취소. 계정이 존재하는 동안 보존 |
+| 모든 상태 → 행 삭제 | 본인 탈퇴 시 FK 연쇄 삭제. 과거 `removed`도 포함 |
 
 상태 또는 역할이 바뀔 때마다 `access_version`을 1 올린다. 사전 등록 활성화·취소와 같은 트랜잭션에서 `pre_registered_email`을 NULL로 바꾼다. `removed`가 되면 그 멤버십의 TOTP와 복구 코드를 지우고, 대기 중인 MFA 초기화 요청은 `expired`로 바꾼다.
 
@@ -867,7 +810,6 @@ OIDC로만 가입한 사용자는 행이 없다. 이때 비밀번호 API는 `409
 | `external_account_blocked` | FR-OIDC-015 | 그 외부 신원·테넌트의 로그인 전체 |
 | `provider_logout` | FR-OIDC-017, 017-01 | 검증된 외부 세션과 `oidc_login_bindings`로 연결된 로그인만 |
 | `external_token_revoked` | FR-OIDC-018, 017-01 | 검증된 철회 대상 토큰과 `oidc_login_bindings`로 연결된 로그인만 |
-| `withdrawal` | 탈퇴 | 사용자의 모든 로그인 |
 | `restore` | 백업 복원 | 모든 로그인 |
 
 ## 6. 무결성·격리·비밀값 보호
@@ -878,17 +820,30 @@ OIDC로만 가입한 사용자는 행이 없다. 이때 비밀번호 API는 `409
 - **비밀값**: 1장 표를 따른다. 응답 스키마에 비밀값 열을 매핑하지 않는다.
 - **DB 계정**: 실행 계정 `passport_user`는 DML만, 마이그레이션 계정 `passport_owner`는 DDL을 가진다(Phase 2 구성).
 
+### 6.1 계정 삭제의 FK 범위
+
+`users.user_id` 삭제는 아래 방향의 자손 행에만 적용한다. 모든 경로에 `ON DELETE CASCADE`를 사용하며 테넌트·서비스·OIDC 설정 같은 공유 부모는 삭제하지 않는다.
+
+| 경로 | 삭제 대상 |
+| --- | --- |
+| 사용자 직접 참조 | `identities`, `email_verification_tokens`, `tenant_memberships`, `mfa_reset_requests`(`user_id` 또는 `decided_by`), `logins` |
+| 멤버십 → TOTP | `totp_credentials` → `totp_recovery_codes` |
+| 로그인 자손 | `oidc_login_bindings`, `login_mfa`, `refresh_token_families` → `refresh_tokens`, `bff_sessions` |
+| 로그인·토큰 계열에 연결된 일회성 값 | `oidc_login_transactions`, `identity_link_tickets`, `sso_authorization_codes` |
+| FK가 없는 감사 기록 | `audit_logs`는 삭제하지 않는다. 원 사용자 ID·탈퇴 시각·삭제 결과를 개인정보 값 없이 기록한다 |
+| 사용자 FK가 없는 운영 기록 | 원 탈퇴의 `idempotency_keys`·`withdrawal_receipts`, `access_version_syncs`, `security_change_events`는 완료 확인·동기화·복원을 위해 필요한 기간 유지한다. 프로필 값·인증 비밀값은 보관하지 않는다 |
+
 ## 7. 트랜잭션 경계와 동시성
 
 트랜잭션은 `apps`의 서비스가 유스케이스 단위로 연다(REQUIREMENTS Phase 2). ETag가 있는 변경은 `If-Match` 값을 `version`과 비교하고, `version_id_col`이 동시 변경을 한 번 더 막는다. 갱신 행이 0이면 `412`다.
 
 | 유스케이스 | 한 트랜잭션 안에서 | 동시성·중복 방지 |
 | --- | --- | --- |
-| Local 가입 | `users`, `user_profiles`, `credentials`, `email_verification_tokens` 삽입 | 이메일 UNIQUE 위반이면 롤백하고 안내 메일만 보낸다(응답은 항상 202) |
+| Local 가입 | 필수 프로필과 두 비밀번호 열을 설정한 `users`, `email_verification_tokens` 삽입 | 이메일 UNIQUE 위반이면 롤백하고 안내 메일만 보낸다(응답은 항상 202) |
 | 이메일 확인 | 토큰 소비, `email_verified_at`, `users.user_status = active` | 원자적 소비 |
 | Local 로그인 | `logins`, `refresh_token_families`, `refresh_tokens` 삽입. 포털이면 `bff_sessions`도 | 새 세션 ID 발급(세션 고정 방지) |
 | 토큰 발급·갱신 | 계열 잠금, 토큰 회전, 사전 등록 멤버십 활성화·이메일 삭제 | `SELECT … FROM refresh_token_families WHERE id = :id FOR UPDATE`로 같은 계열을 직렬화한다. 포털 BFF는 잠금 안에서 최신 저장 토큰을 읽고, 회전과 `bff_sessions`의 토큰 교체를 같은 트랜잭션에서 커밋한다. 회전된 토큰이 제출되면 사용자의 모든 로그인을 끝내고 커밋한 뒤 401이다. 503이나 조건 미충족이면 롤백해 회전하지 않는다 |
-| 로그아웃, 비밀번호 변경, 계정 차단 | `logins` 종료, `bff_sessions` 삭제, (`credentials` 갱신) | `WHERE ended_at IS NULL` |
+| 로그아웃, 비밀번호 변경, 계정 차단 | `logins` 종료, `bff_sessions` 삭제. 비밀번호 변경이면 `users.password_hash`·`password_changed_at`도 갱신 | `WHERE ended_at IS NULL` |
 | OIDC 콜백 | 브라우저 바인딩 대조 후 트랜잭션 소비, 사용자·신원 생성 또는 조회, 멤버십 활성화·이메일 삭제·자동 등록, `logins`·`oidc_login_bindings`·`login_mfa`·계열·`bff_sessions` 생성, 또는 링크 티켓 발급 | 원자적 소비, 신원 UNIQUE. 로그인에 `oidc_trust_version`을 남겨 설정 변경과의 경합을 요청 시 검사로 막는다 |
 | 외부 신원 연결 | 링크 티켓 소비, `identities` 삽입 | UNIQUE 위반 → `409 identity_already_linked` |
 | SSO 코드 발급·교환 | 발급: 코드 삽입. 교환: 코드 소비, 계열·토큰 삽입, 코드에 계열 기록 | 원자적 소비. 이미 소비된 코드면 기록된 계열을 폐기한다 |
@@ -907,14 +862,14 @@ OIDC로만 가입한 사용자는 행이 없다. 이때 비밀번호 API는 `409
 
 1. 변경 API는 한 트랜잭션에서 다음을 한다. 9.4절 대상이면 상태 변경 전에 외부 변경 의도의 영속화를 확인한다.
    - `idempotency_keys`에 먼저 삽입한다. 같은 키의 동시 요청은 UNIQUE 인덱스에서 기다렸다가 처음 결과를 재생한다. 멱등 키 확인은 `If-Match` 평가보다 먼저다(계약 8장).
-   - 상태를 바꾸고 `access_version`을 1 올린다(FR-APP-008-06).
+   - 상태를 바꾸고 `access_version`을 1 올린다(FR-APP-008-06). 탈퇴로 삭제할 멤버십은 삭제 직전 버전 + 1을 최종 무효화 버전으로 확보하고 실제 행은 삭제한다.
    - `access_version_syncs`에 `version = GREATEST(기존, 새 값)`로 upsert한다.
    - 돌려줄 응답을 `idempotency_keys`에 기록한다.
-2. 커밋 후 `access_version_syncs`에 남은 행을 Valkey에 "더 클 때만 쓰기"로 반영하고(이전 버전으로 덮어쓰지 않음), 반영한 버전 이하인 행을 지운다. 평소 이 테이블은 비어 있으므로 남은 행 전체를 반영해도 비용이 작고, 여러 대상을 바꾸는 탈퇴도 같은 방식으로 처리된다.
+2. 커밋 후 `access_version_syncs`에 남은 행을 Valkey에 "더 클 때만 쓰기"로 반영하고(이전 버전으로 덮어쓰지 않음), 반영한 버전 이하인 행을 지운다. 삭제한 멤버십도 큐에 저장한 최종 무효화 버전을 반영하므로 원 행 없이 재시도할 수 있다. 이 버전만으로 접근을 허용하지 않고 6의 DB 존재·상태 검사를 적용한다. 평소 이 테이블은 비어 있으므로 남은 행 전체를 반영해도 비용이 작다.
 3. 2와 9.4절의 외부 기록 확인이 끝나야 성공을 응답한다. Valkey 반영 실패는 `503 access_sync_pending`, 외부 기록 확인 실패는 `503 security_record_pending`이다. 재시도할 행은 남는다.
 4. 같은 `Idempotency-Key`로 재시도하면 상태를 다시 바꾸지 않는다. 원 작업의 외부 커밋 확인과 2를 다시 수행하고 저장된 응답을 돌려준다(FR-APP-008-09). 행의 `version`은 upsert로 항상 최신 커밋 값이다. 탈퇴의 로그인 종료 후 재시도는 9.2절의 전용 완료 경로를 사용한다.
 5. **[제안]** 정리 작업이 10초마다 2를 실행한다. 클라이언트가 재시도하지 않아도 Valkey가 뒤처진 채로 남지 않게 하기 위해서다.
-6. `verifyAccess`는 매 요청 DB에서 관련 세 단위의 현재 커밋된 상태·버전을 함께 읽는다. **SaaS 버전 = Valkey 버전 = DB 버전**이고 현재 자격도 유효할 때만 `fresh`다. Valkey 값 누락·불일치·장애이면 DB 결과로 검증하고 현재 자격을 함께 반환한다(캐시를 보냈으면 `stale`, 없으면 `absent`). DB 검증 실패 시 `503 entitlement_unverifiable`이며 기존 로그인은 유지한다(FR-APP-008-08).
+6. `verifyAccess`는 매 요청 DB에서 사용자·로그인 존재 여부와 관련 세 단위의 현재 커밋된 상태·버전을 함께 읽는다. 삭제된 사용자·로그인·멤버십은 접근 거부이며 DB 연결 장애로 검증할 수 없는 경우와 구분한다. **SaaS 버전 = Valkey 버전 = DB 버전**이고 현재 자격도 유효할 때만 `fresh`다. Valkey 값 누락·불일치·장애이면 DB 결과로 검증하고 현재 자격을 함께 반환한다(캐시를 보냈으면 `stale`, 없으면 `absent`). DB 검증 실패 시 `503 entitlement_unverifiable`이며 기존 로그인은 유지한다(FR-APP-008-08).
 7. Valkey 재시작·이전 스냅샷 복구·키 재생성·지연된 쓰기로 값이 되돌아가도 6의 대조로 이전 허용 캐시를 신뢰하지 않는다. DB와 다른 값은 폐기 후 DB 기준으로 재구축한다. 이 방식은 요청별 DB 버전 조회 비용을 들여 캐시 복구 시 최신성 증명 문제를 단순화한다. 변경 API의 성공 조건인 Valkey 반영은 그대로 유지한다.
 
 ## 9. 데이터 생명주기
@@ -926,8 +881,7 @@ OIDC로만 가입한 사용자는 행이 없다. 이때 비밀번호 API는 `409
 | `oidc_login_transactions`, `identity_link_tickets`, `sso_authorization_codes`, `email_verification_tokens` | `expires_at` 경과 | 1시간 |
 | `totp_credentials`(`pending`) | `pending_expires_at` 경과 | 1시간 |
 | `logins`(`CASCADE`로 `login_mfa`, 계열, 토큰, `bff_sessions`) | `ended_at` 또는 `expires_at`에서 1일 경과 | 1일 |
-| `retained_profiles` | `retention_expires_at` 경과 | 15분 |
-| `mfa_reset_requests` | `pending`이고 `expires_at` 경과 → `expired`. 결정 후 365일 경과 → 삭제 | 1시간 / 1일 |
+| `mfa_reset_requests` | `pending`이고 `expires_at` 경과 → `expired`. 결정 후 365일 경과 → 삭제. 대상 사용자·처리자 탈퇴 시에는 즉시 연쇄 삭제 | 1시간 / 1일 |
 | `idempotency_keys` | `expires_at` 경과 | 1시간 |
 | `withdrawal_receipts` | `expires_at` 경과. 만료 확인은 조회 시에도 적용 | 1시간 |
 | `security_change_events` | 미확인 행 재처리. 확인된 행 삭제는 9.4절 보존 조건 충족 후 | 10초 / 1일 |
@@ -937,18 +891,18 @@ OIDC로만 가입한 사용자는 행이 없다. 이때 비밀번호 API는 `409
 
 ### 9.2 탈퇴 (FR-USER-005)
 
-한 트랜잭션에서 다음을 처리하고, 8장 규약으로 Valkey에 반영한다.
+다음을 한 트랜잭션에서 처리한다. 개인정보를 별도 보관 테이블로 복사하지 않는다.
 
-1. `users.user_status = deleted`, `withdrawn_at` 기록
-2. `user_profiles`의 이메일·표시 이름·전화번호·실명을 `retained_profiles`로 복사(24시간)
-3. `user_profiles`, `credentials`, `identities`, `user_avatars`, `email_verification_tokens` 삭제. 과거 `removed` 행을 포함한 본인 멤버십의 `pre_registered_email`을 모두 NULL로 바꾼다. 같은 이메일의 미활성 사전 등록은 `membership_status`·해지 시각·사유·이메일 NULL을 한 UPDATE로 바꿔 취소한다.
-4. 모든 비해지 멤버십을 `removed`(`withdrawal`)로 바꾸고 `access_version` + 1, 그 멤버십의 TOTP 삭제, 대기 중인 MFA 초기화 요청을 `expired`로 변경
-5. 모든 로그인 종료(`withdrawal`), `bff_sessions` 삭제
-6. 원 `idempotency_keys`에 바인딩한 `withdrawal_receipts`를 생성하고, 9.4절의 외부 기록 참조와 함께 커밋한다. 키는 클라이언트가 최초 요청 전에 보관한 값이다.
+1. 원 멱등 행을 확보한 뒤 대상 `users` 행과 멤버십을 잠그고 재인증·탈퇴 확정·기존 마지막 관리자 제한을 검사한다. 사전 등록 정리에 사용할 이메일과 삭제 대상 ID·멤버십 버전을 확보한다.
+2. 9.4절에 따라 사용자 및 직접·간접 FK 자손 삭제 의도를 외부에 영속 기록한다. 삭제할 멤버십의 직전 `access_version` + 1을 최종 무효화 버전으로 `access_version_syncs`에 기록한다.
+3. 같은 이메일의 미활성 사전 등록 행과 본인의 과거 사전 등록 이메일 잔여값을 정리한다. 같은 이메일의 미활성 사전 등록은 사용자 FK가 NULL이므로 명시적으로 삭제한다.
+4. `DELETE FROM users WHERE user_id = :user_id`로 계정을 삭제한다. 6.1절의 모든 FK 자손은 과거 해지 멤버십·종료 로그인·MFA 초기화 처리 이력을 포함하여 연쇄 삭제한다. 인증 비밀값과 외부 연결 정보도 사용자 행 또는 자손과 함께 삭제된다. 테넌트·서비스·OIDC 설정은 유지한다.
+5. `audit_logs`에 원 사용자 ID·탈퇴 시각·삭제 결과를 기록하고 기존 감사로그는 유지한다. 삭제 대상 사용자 프로필을 포함하는 기존 멱등 응답은 요청자와 관계없이 제거하며 본인의 기존 멱등 기록도 정리한다. 원 탈퇴의 개인정보 없는 `204` 멱등 기록·`withdrawal_receipts`와 `security_change_events`를 함께 커밋한다.
+6. 커밋 후 외부 커밋 확인과 8장의 최종 무효화 버전 반영을 마쳐야 성공한다. 삭제된 사용자·로그인·멤버십의 토큰은 DB 존재 검사로 즉시 거부하며 탈퇴 전 ID를 다시 사용하지 않는다.
 
-`users` 행과 `removed` 멤버십은 개인정보 없이 남는다.
+탈퇴 시각은 `audit_logs.occurred_at` 및 외부 보안 기록에 남는다. `users`에 탈퇴 상태 행을 남기거나 개인정보를 24시간 추가 보관하지 않는다.
 
-커밋 후 외부 기록 확인·Valkey 반영 실패 또는 응답 유실 시, 클라이언트는 `POST /api/v1/auth/withdrawals/complete`(웹은 `/sso/auth/withdrawals/complete`)에 `Withdrawal-Receipt`만 보내 완료 처리를 재개한다. 종료된 BFF 세션·Bearer를 복구하거나 인증 예외를 일반 API로 확대하지 않는다. 만료·불명 키는 동일한 404로 거부한다.
+커밋 후 외부 기록 확인·Valkey 반영 실패 또는 응답 유실 시 클라이언트는 `POST /api/v1/auth/withdrawals/complete`(웹은 `/sso/auth/withdrawals/complete`)에 `Withdrawal-Receipt`만 보내 완료 처리를 재개한다. 원 사용자·로그인 행을 다시 조회하거나 생성하지 않고 남아 있는 원 멱등·동기화·보안 기록으로만 재시도한다. 확인 키는 기존대로 커밋 시점부터 24시간 유효하며 일반 API·개인정보 조회·계정 복구에는 사용하지 못한다. 만료·불명 키는 동일한 404로 거부한다.
 
 ### 9.3 백업 복원 (NFR-OPS-002-01)
 
@@ -965,11 +919,11 @@ OIDC로만 가입한 사용자는 행이 없다. 이때 비밀번호 API는 `409
 외부 저장소는 Passport DB·그 백업과 장애 영역 및 복원 절차가 독립적이어야 한다. 설치별 단조 증가 순번, `event_id` 멱등 기록, 영속 저장 확인, 무결성 검증과 보존 중 삭제 방지를 제공한다. 제품 선택은 구현 사항이며 로컬 파일이나 DB 내 원장만으로 대체하지 않는다.
 
 - **기록 대상:** 탈퇴, 계정 차단·비활성화, 멤버십 해지·비활성화·사전 등록 취소, 테넌트·서비스 이용 중지, 개인정보·인증 수단의 삭제. 대응하는 재활성화·재부여도 순서대로 기록하여 과거 차단을 무조건 재적용하지 않는다. 삭제한 비밀값의 복원 대신 해당 인증 수단을 무효화한다.
-- **내용:** 기록 형식 버전(`schema_version`), 설치 ID, `event_id`, 외부 순번, 원 작업 ID, 대상 ID·상태 버전·변경/삭제 명령·시각·무결성 정보만 보관한다. 탈퇴 시 원래 탈퇴 시각·보관 만료 시각과 대상 멤버십 ID를 포함한다. 프로필 값, 삭제된 개인정보·비밀값·토큰 원문은 복사하지 않는다.
+- **내용:** 기록 형식 버전(`schema_version`), 설치 ID, `event_id`, 외부 순번, 원 작업 ID, 대상 ID·상태 버전·변경/삭제 명령·시각·무결성 정보만 보관한다. 탈퇴 시 원래 탈퇴 시각·삭제한 사용자 ID·FK 자손 ID·대상 멤버십의 최종 무효화 버전을 포함한다. 프로필 값, 삭제된 개인정보·비밀값·토큰 원문은 복사하지 않는다.
 - **쓰기 순서:** HTTP 변경 요청은 `Idempotency-Key`가 필수다. 먼저 원 멱등 행을 확보하고 대상 행을 잠그고 검증한 뒤 변경 의도를 외부에 영속 기록한다. 실패하면 DB 변경을 롤백하고 `503 security_record_pending`(`db_committed: false`, `security_recorded: false`)이다. 성공하면 상태·버전·`security_change_events`·필요한 멱등/확인 키를 같은 DB 트랜잭션에서 커밋한다. 이후 외부에 DB 커밋 확인을 멱등 기록하고 `confirmed_at`을 채운다. 이 확인과 필요한 Valkey 반영을 마쳐야 성공을 응답한다.
 - **부분 실패:** DB 커밋 후 외부 확인 실패는 `503 security_record_pending`(`db_committed: true`, `security_recorded: false`)이며 DB 변경을 유지한다. 작업 ID로 원 이벤트를 찾아 외부 확인·캐시 반영만 재시도한다. 탈퇴는 9.2절 완료 경로를 사용한다. 서버 작업도 미확인 이벤트를 재처리한다.
 - **롤백·불확실성:** 확인된 롤백은 외부에 취소 기록을 남긴다. 복원 시 변경 의도만 있고 커밋·롤백을 확정할 수 없는 기록은 제한·삭제 방향으로 적용하고 운영 확인 대상으로 남긴다. 불확실한 기록으로 접근 허용·계정 복구를 수행하지 않는다.
-- **백업·복원:** 백업 기준점 생성 중 보안 변경을 잠시 막고 진행 중 트랜잭션·외부 확인을 해소한 뒤, DB의 일관된 백업 스냅샷과 외부 저널 기준 순번을 함께 확정한다. 기준점보다 앞선 미확정 의도가 백업 밖에 빠지지 않도록 하며, 이후 변경을 재개한다. 복원은 그 순번 이후부터 서비스 재개 직전까지의 기록을 연속 검증하고 대상별 순서·버전과 `event_id`로 멱등 재적용한다. 원 삭제를 유지하고, 탈퇴 프로필 보관 시한도 원래 시각을 사용하여 24시간을 다시 시작하지 않는다. 대상 멤버십이 백업에 없더라도 해지 이력을 재생성하여 OIDC 자동 등록으로 우회하지 못하게 한다. 재활성화 기록은 앞선 제한 적용이 확인된 경우에만 순서대로 적용한다.
+- **백업·복원:** 백업 기준점 생성 중 보안 변경을 잠시 막고 진행 중 트랜잭션·외부 확인을 해소한 뒤, DB의 일관된 백업 스냅샷과 외부 저널 기준 순번을 함께 확정한다. 기준점보다 앞선 미확정 의도가 백업 밖에 빠지지 않도록 하며, 이후 변경을 재개한다. 복원은 그 순번 이후부터 서비스 재개 직전까지의 기록을 연속 검증하고 대상별 순서·버전과 `event_id`로 멱등 재적용한다. 사용자 삭제 이벤트는 해당 사용자와 모든 FK 자손의 물리 삭제를 재적용하며 이미 없으면 멱등 성공이다. 탈퇴한 사용자의 계정·멤버십·개인정보 보관 행을 재생성하지 않는다. 사용자 계정이 남아 있는 관리자 해지·비활성화의 경우에만, 대상 멤버십이 백업에 없어도 해지 이력을 재생성하여 OIDC 자동 등록 우회를 막는다. 재활성화 기록은 앞선 제한 적용이 확인된 경우에만 순서대로 적용한다.
 - **보존:** 모든 보존 백업의 가장 오래된 저널 기준점 이후 기록을 유지한다. 최소 백업 보존기간 30일을 포함하며, 관련 백업의 폐기 및 진행 중 복원 완료 전에는 삭제하지 않는다. 기록·백업의 삭제는 기준점의 연속성을 함께 확인한다.
 
 ## 10. API·요구사항 대응
@@ -980,33 +934,32 @@ OIDC로만 가입한 사용자는 행이 없다. 이때 비밀번호 API는 `409
 
 | API 묶음 | operation | 주로 읽음 | 씀 |
 | --- | --- | --- | --- |
-| 가입·이메일 확인 | `signupLocal`, `confirmEmailVerification`, `resendEmailVerification` | `user_profiles` | `users`, `user_profiles`, `credentials`, `email_verification_tokens` |
-| Local 로그인·재인증 | `loginLocal`, `ssoLoginLocal`, `reauthenticateWithPassword` | `user_profiles`, `credentials`, `users` | `logins`, `refresh_token_families`, `refresh_tokens`, `bff_sessions` |
+| 가입·이메일 확인 | `signupLocal`, `confirmEmailVerification`, `resendEmailVerification` | `users` | `users`, `email_verification_tokens` |
+| Local 로그인·재인증 | `loginLocal`, `ssoLoginLocal`, `reauthenticateWithPassword` | `users` | `logins`, `refresh_token_families`, `refresh_tokens`, `bff_sessions` |
 | 토큰 | `issueToken`, `ssoSelectContext`, `exchangeSsoCode` | `logins`, `login_mfa`, `tenants`, `tenant_memberships`, `tenant_applications`, `applications`, `tenant_oidc_configurations` | `refresh_tokens`, `tenant_memberships`(사전 등록 활성화), `sso_authorization_codes`, `bff_sessions`, `logins` |
 | 로그아웃·세션 | `logout`, `logoutAll`, `ssoLogout`, `ssoLogoutAll`, `ssoGetSession` | `bff_sessions`, `logins`, `refresh_tokens` | `logins`, `bff_sessions` |
 | JWKS | `getJwks` | `signing_keys` | |
-| OIDC | `getTenantLoginOptions`, `ssoStartOidcAuthorization`, `ssoOidcCallback` | `tenants`, `tenant_oidc_configurations`, `identities` | `oidc_login_transactions`, `users`, `user_profiles`, `identities`, `tenant_memberships`, `logins`, `oidc_login_bindings`, `login_mfa`, 계열·토큰, `bff_sessions`, `identity_link_tickets` |
+| OIDC | `getTenantLoginOptions`, `ssoStartOidcAuthorization`, `ssoOidcCallback` | `tenants`, `tenant_oidc_configurations`, `identities` | `oidc_login_transactions`, `users`, `identities`, `tenant_memberships`, `logins`, `oidc_login_bindings`, `login_mfa`, 계열·토큰, `bff_sessions`, `identity_link_tickets` |
 | SSO | `ssoAuthorize` | `bff_sessions`, `logins`, `applications`, `tenant_memberships`, `tenant_applications`, `login_mfa` | `sso_authorization_codes` |
-| 본인 정보 | `getMe`, `updateMe`, `uploadMyAvatar`, `deleteMyAvatar`, `getAvatar`, `changePassword`, `listMyTenants`, `listMyIdentities`, `linkIdentity`, `withdrawMe` | `users`, `user_profiles`, `user_avatars`, `credentials`, `identities`, `tenant_memberships` | 같은 테이블, `identity_link_tickets`, `retained_profiles`, `logins` |
+| 본인 정보 | `getMe`, `updateMe`, `changePassword`, `listMyTenants`, `listMyIdentities`, `linkIdentity`, `withdrawMe` | `users`, `identities`, `tenant_memberships` | 같은 테이블, `identity_link_tickets`, `logins` |
 | 본인 MFA | `getMyTenantMfa`, `startTotpEnrollment`, `confirmTotpEnrollment`, `verifyMfa`, `recoverMfaWithCode`, `disableTotp`, `createMfaResetRequest` | `tenant_memberships`, `tenants`, `totp_credentials`, `mfa_reset_requests` | `totp_credentials`, `totp_recovery_codes`, `login_mfa`, `mfa_reset_requests` |
 | 테넌트 설정 | `createTenant`, `getTenant`, `updateTenant`, `getTenantMfaPolicy`, `putTenantMfaPolicy`, `getTenantOidcConfiguration`, `putTenantOidcConfiguration` | `tenants`, `tenant_oidc_configurations` | `tenants`, `tenant_memberships`, `tenant_oidc_configurations`, `logins` |
-| 멤버 | `listTenantMembers`, `addTenantMember`, `getTenantMember`, `updateTenantMember`, `removeTenantMember` | `tenant_memberships`, `user_profiles`, `totp_credentials` | `tenant_memberships`, `totp_credentials`, `mfa_reset_requests` |
-| MFA 초기화 처리 | `listTenantMfaResetRequests`, `approveTenantMfaResetRequest`, `rejectTenantMfaResetRequest`, `adminListMfaResetRequests`, `adminApproveMfaResetRequest`, `adminRejectMfaResetRequest` | `mfa_reset_requests`, `user_profiles` | `mfa_reset_requests`, `totp_credentials` |
-| 탈퇴 완료 | `withdrawMe`, `completeWithdrawal`, `ssoCompleteWithdrawal` | `withdrawal_receipts`, `idempotency_keys`, `security_change_events`, 현재 접근 자격 버전 | 탈퇴 트랜잭션의 `withdrawal_receipts`, 외부 확인·Valkey 동기화 |
-| 탈퇴 보관 정보 | `listWithdrawnMembers`, `accessRetainedProfile`, `adminListWithdrawnUsers`, `adminAccessRetainedProfile` | `retained_profiles`, `tenant_memberships` | `audit_logs` |
+| 멤버 | `listTenantMembers`, `addTenantMember`, `getTenantMember`, `updateTenantMember`, `removeTenantMember` | `tenant_memberships`, `users`, `totp_credentials` | `tenant_memberships`, `totp_credentials`, `mfa_reset_requests` |
+| MFA 초기화 처리 | `listTenantMfaResetRequests`, `approveTenantMfaResetRequest`, `rejectTenantMfaResetRequest`, `adminListMfaResetRequests`, `adminApproveMfaResetRequest`, `adminRejectMfaResetRequest` | `mfa_reset_requests`, `users` | `mfa_reset_requests`, `totp_credentials` |
+| 탈퇴 완료 | `withdrawMe`, `completeWithdrawal`, `ssoCompleteWithdrawal` | `withdrawal_receipts`, `idempotency_keys`, `security_change_events`, `access_version_syncs`의 최종 무효화 버전 | 탈퇴 트랜잭션의 `withdrawal_receipts`, 외부 확인·Valkey 동기화 |
 | 테넌트 서비스 | `listTenantApplications`, `putTenantApplication`, `adminListTenantApplications`, `adminPutTenantApplication` | `applications`, `tenant_applications` | `tenant_applications` |
 | 플랫폼 관리 | `adminListTenants`, `adminGetTenant`, `adminUpdateTenantStatus`, `adminSearchUsers`, `adminGetUser`, `updateUserStatus`, `adminCreateApplication`, `adminListApplications`, `adminGetApplication`, `adminUpdateApplication`, `adminRotateApplicationSecret`, `adminGetTenantMfaPolicy`, `adminPutTenantMfaPolicy`, `adminGetTenantOidcConfiguration`, `adminPutTenantOidcConfiguration` | 위와 같음 | `tenants`, `users`, `logins`, `applications`, `tenant_oidc_configurations` |
-| 서비스 API | `verifyAccess`, `getServiceTenant`, `listServiceTenantMembers`, `getServiceTenantMember` | `applications`, `logins`, `login_mfa`, `tenants`, `tenant_memberships`, `tenant_applications`, `user_profiles` | `logins.last_activity_at` |
+| 서비스 API | `verifyAccess`, `getServiceTenant`, `listServiceTenantMembers`, `getServiceTenantMember` | `applications`, `logins`, `login_mfa`, `tenants`, `tenant_memberships`, `tenant_applications`, `users` | `logins.last_activity_at` |
 
 ### 10.2 요구사항 → 모델
 
 | 요구사항 | 모델 |
 | --- | --- |
-| FR-USER-001~004, 002-01, 002-02 | `users`, `user_profiles`, `user_avatars` |
+| FR-USER-001~004, 002-01, 002-02 | `users` |
 | FR-USER-003, D-04 | `users.user_status`, `email_verification_tokens` |
-| FR-USER-005, 005-01, 005-02 | `retained_profiles`, `users.withdrawn_at`, `tenant_memberships.removed_reason`, `withdrawal_receipts`, 9.2절 |
-| FR-USER-006, 007, FR-OIDC-004, 005, D-08 | `identities` UNIQUE(`issuer`, `subject`), `identity_link_tickets`, `credentials` |
-| FR-AUTH-001, 005~007, NFR-SEC-005 | `credentials` |
+| FR-USER-005, 005-01, 005-02 | 사용자 FK의 `CASCADE`, `audit_logs`, `withdrawal_receipts`, 9.2절 |
+| FR-USER-006, 007, FR-OIDC-004, 005, D-08 | `users`의 전역 ID·Local 인증 정보·프로필, 인증 비밀값을 제외하는 DTO, `identities` UNIQUE(`issuer`, `subject`), `identity_link_tickets` |
+| FR-AUTH-001, 005~007, NFR-SEC-005 | `users.user_status`, `users.password_hash`, `users.password_changed_at` |
 | FR-AUTH-008, 008-01, NFR-SEC-002 | `signing_keys` |
 | FR-AUTH-009-01~07, 009-07-01 | `logins`, `refresh_token_families`, `refresh_tokens`, 5.6절 |
 | ADR-014, D-03, FR-AUTH-009-02-01~04, NFR-SEC-003 | `bff_sessions`, `refresh_token_families.client_id`, `sso_authorization_codes`, `applications.bff_redirect_uris` |
@@ -1014,11 +967,11 @@ OIDC로만 가입한 사용자는 행이 없다. 이때 비밀번호 API는 `409
 | FR-OIDC-007, 008, 012 | `oidc_login_transactions` |
 | FR-OIDC-013, 015~018, 017-01 | `logins.tenant_id`, `identity_id`, `end_reason`, `oidc_login_bindings` |
 | FR-TEN-001~004, D-05 | `tenants` |
-| FR-MEM-001~005, 005-01, 008 | `tenant_memberships` 부분 UNIQUE·이메일 생명주기 CHECK, `removed` 보존 |
+| FR-MEM-001~005, 005-01, 008 | `tenant_memberships` 부분 UNIQUE·이메일 생명주기 CHECK, 계정 존속 중 `removed` 보존·탈퇴 시 연쇄 삭제 |
 | FR-APP-001~005, 007, D-07 | `applications`, `tenant_applications` |
 | FR-APP-008-01~09 | `access_version`, `idempotency_keys`, `access_version_syncs`, 8장 |
 | FR-MFA-001~005, 004-01, 004-02 | `tenants.mfa_enabled_at`, `totp_credentials`, `totp_recovery_codes`, `login_mfa`, `mfa_reset_requests` |
-| NFR-SEC-006, 008 | 1장 비밀값 저장, `retained_profiles` 보존 기간 |
+| NFR-SEC-006, 008 | 1장 비밀값 저장, 9.2절 개인정보 즉시 삭제 |
 | NFR-SEC-007, 007-01 | `audit_logs` |
 | NFR-OPS-002, 002-01~03 | `security_change_events`, 독립 외부 저널, 9.3~9.4절 |
 
@@ -1028,7 +981,7 @@ OIDC로만 가입한 사용자는 행이 없다. 이때 비밀번호 API는 `409
 2. **리비전 0001 하나로 전체 생성**: ORM 모델에서 autogenerate하고 다음을 손으로 확인한다.
    - 부분 UNIQUE 인덱스(`postgresql_where`)와 CHECK가 빠짐없이 들어갔는지
    - 이름: 현재 `naming_convention`은 첫 열 이름만 쓴다. 그래서 여러 열 인덱스·UNIQUE와 모든 CHECK는 이 문서의 이름을 명시한다. 예를 들어 `tenant_memberships`의 두 부분 UNIQUE는 이름을 주지 않으면 충돌한다.
-   - 테이블 생성 순서(FK 의존): `users` → `user_profiles`, `credentials`, `user_avatars`, `email_verification_tokens`, `retained_profiles` → `tenants` → `applications` → `tenant_oidc_configurations` → `identities` → `tenant_memberships` → `tenant_applications` → `totp_credentials` → `totp_recovery_codes` → `mfa_reset_requests` → `logins` → `oidc_login_bindings`, `login_mfa` → `refresh_token_families` → `refresh_tokens` → `bff_sessions` → `oidc_login_transactions` → `identity_link_tickets` → `sso_authorization_codes` → `signing_keys`, `idempotency_keys` → `withdrawal_receipts` → `access_version_syncs`, `security_change_events`, `audit_logs`
+   - 테이블 생성 순서(FK 의존): `users` → `email_verification_tokens` → `tenants` → `applications` → `tenant_oidc_configurations` → `identities` → `tenant_memberships` → `tenant_applications` → `totp_credentials` → `totp_recovery_codes` → `mfa_reset_requests` → `logins` → `oidc_login_bindings`, `login_mfa` → `refresh_token_families` → `refresh_tokens` → `bff_sessions` → `oidc_login_transactions` → `identity_link_tickets` → `sso_authorization_codes` → `signing_keys`, `idempotency_keys` → `withdrawal_receipts` → `access_version_syncs`, `security_change_events`, `audit_logs`
 3. **권한**: 기본 권한으로 `passport_user`가 DML을 받는다. 0001에서 `REVOKE UPDATE ON audit_logs FROM passport_user`를 실행한다(추가만 가능, 삭제는 보존 기간 작업용으로 남김). 시퀀스는 쓰지 않는다(UUID PK).
 4. **초기 데이터**: 마이그레이션에 넣지 않는다. 플랫폼 관리자는 설치 CLI가 지정하고, 첫 서명 키는 시작 시 또는 CLI로 만든다.
 5. **검증**:
@@ -1036,6 +989,9 @@ OIDC로만 가입한 사용자는 행이 없다. 이때 비밀번호 API는 `409
    - 업그레이드 직후 `alembic check`에 차이가 없다.
    - 기존 `test_api_account_cannot_change_schema`에 더해 `passport_user`의 `audit_logs` UPDATE가 거부되는지 확인한다.
    - CHECK·부분 UNIQUE마다 위반 삽입이 실패하는 테스트를 둔다.
+   - Local 비밀번호 두 열의 동시 설정·NULL, 한쪽만 설정한 행의 거부, 비밀번호 변경 후 전체 로그인 종료 및 탈퇴 시 계정·자손의 물리 삭제를 검증한다.
+   - 이메일·표시 이름 NOT NULL, 이름·성 각각 50자 제한, 탈퇴 후 사용자 및 모든 FK 자손 부재, 처리자로 연결된 타 사용자 MFA 요청의 삭제, 공유 부모·감사로그 유지, 같은 이메일 재가입 시 새 사용자 ID 발급을 검증한다.
+   - 삭제된 멤버십의 최종 무효화 버전 반영, 사용자 행 없이 탈퇴 완료 확인 재시도, 사용자 FK 없는 운영 기록의 개인정보 비포함, 백업 복원 시 사용자·자손 재삭제를 검증한다.
    - Enum의 정수 키·기본값·상태 CHECK·부분 인덱스가 1.1절과 같은지, ORM에서 Enum으로 왕복 변환되는지 검증한다. 알 수 없는 키는 거부하고 API에는 문자열 명칭으로 반환되는지 확인한다.
    - 사전 등록 활성화·취소의 이메일 삭제, 다른 브라우저 콜백 거부, 외부 세션·토큰별 종료 범위를 검증한다.
    - Valkey 이전 값 복구, 탈퇴 응답 유실 후 24시간 완료 확인, 외부 기록의 커밋 전·후 실패와 복원 재적용을 통합 검증한다.
@@ -1044,10 +1000,9 @@ OIDC로만 가입한 사용자는 행이 없다. 이때 비밀번호 API는 `409
 
 | 6장 | 이 문서 | 이유 |
 | --- | --- | --- |
-| `UserProfile.avatar_ref` | `user_avatars` | 교체 시 공개 ID를 바꿔 즉시 무효화한다. 별도 파일 저장소가 필요 없다 |
 | `TenantOIDCConfiguration.credential_ref` | `client_secret_ciphertext` | **[제안]** 외부 비밀 저장소 없이 설치한다(13장 4번) |
-| `Identity.provider_type` | 없음 | 외부 신원은 OIDC만 있다. Local은 `credentials`다 |
-| `AuditEvent`(`actor_id`, `tenant_id`, `action`, `target_id`, `at`) | `audit_logs` + `actor_type`, `result`, `request_id`, `source_ip`, `reason`, `details` | 계약의 `x-audit-event`, 관리자 사유, 보관 정보 열람 목적을 기록한다 |
+| `Identity.provider_type` | 없음 | 외부 신원은 OIDC만 있다. Local 인증 정보는 `users`에 둔다 |
+| `AuditEvent`(`actor_id`, `tenant_id`, `action`, `target_id`, `at`) | `audit_logs` + `actor_type`, `result`, `request_id`, `source_ip`, `reason`, `details` | 계약의 `x-audit-event`, 관리자 작업·조회 사유, 계정 삭제 결과를 기록한다 |
 | 없음 | 4.4~4.7절 테이블 | REQUIREMENTS 11장 Phase 1 범위(로그인·토큰·일회성 값·MFA·멱등·동기화) |
 
 ## 13. 설계 결정과 미결·제안 목록
@@ -1056,11 +1011,10 @@ OIDC로만 가입한 사용자는 행이 없다. 이때 비밀번호 API는 `409
 2. **BFF 자격 증명 분리**: 현재는 `applications`의 서비스 자격 증명 하나로 서비스 API와 SSO 교환을 모두 인증한다. 분리하면 `bff_client_secret_hash` 등 열이 추가된다.
 3. **TOTP와 멤버십**: TOTP를 멤버십에 묶고 해지 시 삭제한다(4.4절).
 4. **비밀값 암호화**: 애플리케이션 AES-256-GCM, 키는 env. REQUIREMENTS 6장의 `credential_ref`가 외부 비밀 저장소를 뜻한다면 이 설계가 바뀐다.
-5. **프로필 사진 저장**: DB `bytea`(4.1절).
-6. **전화번호·실명 열 암호화**(NFR-SEC-006): 제안은 P0에서 열 암호화를 하지 않고 디스크·백업 암호화로 보호하는 것이다. 테넌트 관리자 검색 `q`가 실명 부분 일치를 요구하기 때문이다.
-7. **`pg_trgm`**: 플랫폼 관리자 사용자 검색용(4.1절).
-8. **감사 기록**: 단일 테이블 + 일 단위 삭제로 시작하고, 양이 커지면 월 단위 파티션으로 바꾼다. `source_ip`를 기록할지 정해야 한다.
-9. **복원 후 재적용 기록**(확정): 독립 외부 저장소의 영속 기록과 연결·재시도용 DB 원장을 사용한다. 완료 응답 조건·재적용·보존은 9.4절을 따른다.
-10. **`last_activity_at` 갱신 단위**: 1분.
-11. **OIDC 로그인 브라우저 바인딩**(필수): `browser_binding_hash`와 트랜잭션 전용 HttpOnly 쿠키를 시작·콜백에서 대조한다(4.6절).
-12. **수명·보관 값**: 이메일 확인 토큰 24시간, OIDC 트랜잭션·링크 티켓·확인 전 TOTP 10분, SSO 코드 60초, MFA 초기화 요청 72시간(결정 후 365일 보관), 멱등 키 24시간, 종료된 로그인 1일 보관, 서명 키 게시 일정.
+5. **이름·성 열 암호화**(NFR-SEC-006): 제안은 P0에서 열 암호화를 하지 않고 디스크·백업 암호화로 보호하는 것이다. 테넌트 관리자 검색 `q`가 `fist_name`·`last_name` 각각의 부분 일치를 요구하기 때문이다.
+6. **`pg_trgm`**: 플랫폼 관리자 사용자 검색용(4.1절).
+7. **감사 기록**: 단일 테이블 + 일 단위 삭제로 시작하고, 양이 커지면 월 단위 파티션으로 바꾼다. `source_ip`를 기록할지 정해야 한다.
+8. **복원 후 재적용 기록**(확정): 독립 외부 저장소의 영속 기록과 연결·재시도용 DB 원장을 사용한다. 완료 응답 조건·재적용·보존은 9.4절을 따른다.
+9. **`last_activity_at` 갱신 단위**: 1분.
+10. **OIDC 로그인 브라우저 바인딩**(필수): `browser_binding_hash`와 트랜잭션 전용 HttpOnly 쿠키를 시작·콜백에서 대조한다(4.6절).
+11. **수명·보관 값**: 이메일 확인 토큰 24시간, OIDC 트랜잭션·링크 티켓·확인 전 TOTP 10분, SSO 코드 60초, MFA 초기화 요청 72시간(결정 후 365일 보관), 멱등 키 24시간, 종료된 로그인 1일 보관, 서명 키 게시 일정.

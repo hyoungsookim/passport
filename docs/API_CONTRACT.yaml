@@ -235,18 +235,17 @@ info:
 
     개인 TOTP 해제(FR-MFA-004-01)는 로그인 방식과 같은 방식의 재인증만 인정한다.
 
-    ## 6. 프로필 필드 열람 범위 (FR-USER-002-02, FR-USER-005-01)
+    ## 6. 프로필 필드 열람 범위 (FR-USER-002-02)
 
-    | 보는 사람 | `email` | `display_name` | `avatar_url` | `phone` | `real_name` | 스키마 |
-    | --- | --- | --- | --- | --- | --- | --- |
-    | 본인 | O | O | O | O | O | `UserSelf` |
-    | 같은 테넌트 관리자 | O | O | O | O | O | `MemberAdminView` |
-    | 같은 테넌트 일반 구성원 | - | O | O | - | - | `MemberPeerView` |
-    | 플랫폼 관리자 | O | O | O | - | - | `PlatformUserView` |
-    | 연동 SaaS(이용 자격 범위) | O | O | O | - | - | `ServiceUserView` |
-    | 탈퇴 후 보관 정보(플랫폼 관리자, 탈퇴 시점 소속 테넌트의 현재 관리자) | O | O | - | O | O | `RetainedProfile` |
+    | 보는 사람 | `email` | `display_name` | `fist_name` | `last_name` | 스키마 |
+    | --- | --- | --- | --- | --- | --- |
+    | 본인 | O | O | O | O | `UserSelf` |
+    | 같은 테넌트 관리자 | O | O | O | O | `MemberAdminView` |
+    | 같은 테넌트 일반 구성원 | - | O | - | - | `MemberPeerView` |
+    | 플랫폼 관리자 | O | O | - | - | `PlatformUserView` |
+    | 연동 SaaS(이용 자격 범위) | O | O | - | - | `ServiceUserView` |
 
-    보관 정보 열람은 목적(`purpose`)과 사유(`reason`)를 받아 감사 기록한다. 보관 기간은 탈퇴 후 24시간이다.
+    탈퇴하면 사용자와 모든 FK 자손을 즉시 물리 삭제한다. 개인정보 추가 보관·탈퇴자 개인정보 조회 기능은 제공하지 않는다(FR-USER-005, 005-01).
 
     ## 7. 목록: 페이징·검색·정렬
 
@@ -270,8 +269,8 @@ info:
       - **[제안]** 키는 24시간 보관한다.
       - 멱등 키 확인은 `If-Match` 평가보다 먼저 한다. 그래서 커밋 후 재시도할 때 바뀐 ETag 때문에 실패하지 않는다.
     - **접근 자격 변경 API**(FR-APP-008): 멤버십 상태 변경·제거, 테넌트 상태 변경, TenantApplication 변경, 계정 탈퇴.
-      1. 9.4절 외부 변경 의도 영속화를 확인한 뒤 상태 변경과 관련 `access_version` 증가를 한 DB 트랜잭션으로 커밋한다(FR-APP-008-06).
-      2. 커밋 후 최신 버전을 Valkey 검증 경로에 반영한다. 이전 버전으로 덮어쓰지 않는다(FR-APP-008-07).
+      1. 9.4절 외부 변경 의도 영속화를 확인한 뒤 상태 변경과 관련 `access_version` 증가를 한 DB 트랜잭션으로 커밋한다(FR-APP-008-06). 탈퇴는 삭제할 멤버십의 직전 버전 + 1을 최종 무효화 버전으로 큐·외부 기록에 남기고 사용자 및 FK 자손을 삭제한다.
+      2. 커밋 후 최신 버전을 Valkey 검증 경로에 반영한다. 삭제한 멤버십은 큐의 최종 무효화 버전을 사용하며 사용자·멤버십 행 없이도 재시도한다. 이전 버전으로 덮어쓰지 않는다(FR-APP-008-07).
       3. 1과 2 및 외부 커밋 확인이 끝난 뒤에만 성공을 응답한다. 이 응답 이후 시작된 해당 범위의 신규 요청은 거부된다(FR-APP-008-01).
       4. 2가 실패하면 `503 access_sync_pending`을 반환한다. 본문의 `db_committed: true`, `cache_synced: false`로
          저장 완료와 반영 미완료를 구분한다. 같은 `Idempotency-Key`로 재시도하면 상태·버전을 다시 바꾸지 않고,
@@ -283,11 +282,12 @@ info:
       커밋 전 실패는 롤백하고, 커밋 후 실패는 원 작업의 외부 확인·동기화만 재시도한다. 관련 operation의 503은 이 오류도 포함한다.
       복원 시 외부 기록의 누락·무결성 오류를 검증하고 삭제·차단을 재적용하기 전에는 서비스를 재개하지 않는다.
     - **Valkey 신뢰**: 매 요청 관련 세 버전을 DB의 현재 커밋된 상태·버전과 함께 읽는다.
-      SaaS·Valkey·DB 버전이 모두 같고 현재 자격이 유효한 경우에만 캐시를 `fresh`로 사용한다.
+      사용자·로그인·멤버십이 삭제되었으면 기존 토큰을 거부한다. SaaS·Valkey·DB 버전이 모두 같고 현재 자격이 유효한 경우에만 캐시를 `fresh`로 사용한다.
       Valkey 값 누락·불일치·장애는 DB 검증으로 대체하고 현재 자격을 함께 반환한다(캐시 제공 시 stale, 없으면 absent). 재구축 후 정상 비교를 재개하며 DB 검증도 실패하면 503이다.
       이전 스냅샷 복구·키 재생성·지연 쓰기도 같은 규칙으로 처리한다.
     - **탈퇴 재시도**: 첫 요청에 `Withdrawal-Receipt`를 필수로 보내 원 사용자·멱등 키·본문 해시에 바인딩한다.
       로그인 종료 후에는 전용 완료 경로로 이미 커밋된 원 요청의 외부 기록·Valkey 반영과 완료 응답만 재개한다.
+      삭제된 사용자·로그인 행을 조회하거나 복구하지 않고 사용자 FK 없는 원 멱등·동기화·보안 기록으로만 처리한다.
       키는 원 DB 커밋부터 24시간 유효하고 일반 API 인증·새 탈퇴·계정 복구·정보 조회에는 사용할 수 없다.
       원 응답 유실이나 401·503 이후에도 클라이언트에 미리 보관한 키로 완료 경로를 사용할 수 있다.
     - 변경 응답 전에 이미 인가를 통과한 요청은 완료를 허용한다(FR-APP-008-02).
@@ -327,8 +327,6 @@ info:
     | 409 | `totp_already_enrolled` | 이미 TOTP 등록됨 |
     | 409 | `local_credential_not_set` | Local 비밀번호가 없는 계정 |
     | 412 | `precondition_failed` | `If-Match` 불일치 |
-    | 413 | `payload_too_large` | 업로드 크기 초과 |
-    | 415 | `unsupported_media_type` | 허용하지 않는 형식 |
     | 422 | `validation_failed` | 필드 검증 실패. `errors[]` 포함 |
     | 422 | `invalid_otp` | OTP·복구 코드 불일치, 만료, 재사용 |
     | 422 | `idempotency_key_reused` | 같은 키에 다른 본문 |
@@ -468,8 +466,8 @@ info:
     2. 첫 요청 전에 256비트 확인 키를 생성·보관하고 `POST /sso/api/v1/users/me/withdrawal { confirm: true }`를
        `Idempotency-Key`·`Withdrawal-Receipt`와 함께 호출한다.
        - 즉시 완료되며 유예와 취소는 없다.
-       - 모든 로그인을 종료하고 멤버십을 종료한다(접근 자격 변경). 응답과 함께 SSO 세션 쿠키가 지워진다.
-       - 프로필 사진과 과거 멤버십의 사전 등록 이메일은 삭제한다. 이메일·표시 이름·전화번호·실명은 24시간 보관한다.
+       - 사용자와 모든 FK 자손을 같은 트랜잭션에서 물리 삭제한다. 과거 해지 멤버십·종료 로그인·토큰·MFA 요청 및 처리 이력도 삭제하며 기존 토큰은 거부한다. 응답과 함께 SSO 세션 쿠키가 지워진다.
+       - 같은 이메일의 미활성 사전 등록도 삭제하며 개인정보를 추가 보관하지 않는다. 감사로그와 사용자 FK 없는 원 탈퇴 완료 확인·동기화·복원용 기록은 개인정보 값 없이 유지한다.
     3. 응답 유실·503 또는 세션 무효화로 원 API가 401이면 `/sso/auth/withdrawals/complete`에 같은 확인 키를 보낸다.
        - 유효한 키로 커밋된 원 요청의 외부 기록·Valkey 반영을 재개하고, 완료 시 204를 반환한다.
        - 미커밋 요청·불명·만료 키는 동일한 404다. 키는 첫 커밋부터 24시간만 유효하고 연장하지 않는다.
@@ -495,12 +493,12 @@ info:
     | FR-OIDC-010, FR-TEN-009, D-06 | `getTenantOidcConfiguration`, `putTenantOidcConfiguration`, `adminGetTenantOidcConfiguration`, `adminPutTenantOidcConfiguration` |
     | FR-OIDC-011 | `getTenantLoginOptions`, `ssoStartOidcAuthorization` |
     | FR-OIDC-015, 017, 017-01, 018 | 서버 내부 감지 처리. 결과는 `issueToken`, `verifyAccess`의 `token_revoked` |
-    | FR-USER-001, 002, 002-01 | `getMe`, `updateMe`, `uploadMyAvatar`, `deleteMyAvatar`, `getAvatar` |
+    | FR-USER-001, 002, 002-01 | `getMe`, `updateMe` |
     | FR-USER-002-02 | `listTenantMembers`, `getTenantMember`, `adminSearchUsers`, `verifyAccess`, `listServiceTenantMembers`, `getServiceTenantMember` |
     | FR-USER-003, D-04 | `signupLocal`, `confirmEmailVerification`, `resendEmailVerification` |
     | FR-USER-004 | `getMe`, `adminGetUser`, `updateUserStatus` |
-    | FR-USER-005, 005-01, 005-02 | `withdrawMe`, `completeWithdrawal`, `ssoCompleteWithdrawal`, `listWithdrawnMembers`, `accessRetainedProfile`, `adminListWithdrawnUsers`, `adminAccessRetainedProfile` |
-    | FR-USER-007 | `listMyIdentities`(인증 수단과 프로필 분리) |
+    | FR-USER-005, 005-01, 005-02 | `withdrawMe`, `completeWithdrawal`, `ssoCompleteWithdrawal` |
+    | FR-USER-007 | `listMyIdentities`(전역 계정의 인증 수단 조회, 인증 비밀값 제외) |
     | FR-TEN-001, 002, 003, D-05 | `createTenant`, `getTenant`, `updateTenant`, `adminListTenants`, `adminGetTenant` |
     | FR-TEN-004 | `adminUpdateTenantStatus` |
     | FR-TEN-008, FR-MFA-002 | `getTenantMfaPolicy`, `putTenantMfaPolicy`, `adminGetTenantMfaPolicy`, `adminPutTenantMfaPolicy` |
@@ -554,14 +552,15 @@ info:
     - 로그인, 클라이언트별 Refresh Token 계열, SSO 세션·서버 측 토큰 저장 참조·무효화 연계, SSO 클라이언트·허용 redirect URI·일회용 인가 코드·PKCE, OIDC 로그인 트랜잭션, 링크 티켓, 이메일 확인 토큰, TOTP 등록·복구 코드, MFA 초기화 요청, 멱등 키 저장소
     - 모든 변경 가능 리소스의 버전(ETag 원천)
     - OIDC 트랜잭션의 브라우저 바인딩 해시, 검증된 외부 세션·토큰별 `oidc_login_bindings`
-    - 원 탈퇴 멱등 키에 연결한 `withdrawal_receipts`(해시·24시간 만료)
+    - 사용자 행·직접/간접 FK 자손의 `ON DELETE CASCADE`, 감사로그 보존, 사용자 삭제 후에도 동작하는 최종 무효화 버전 큐
+    - 원 탈퇴 멱등 키에 연결한 `withdrawal_receipts`(해시·24시간 만료, 사용자 FK 없음)
     - 외부 보안 저널에 연결한 `security_change_events`와 백업의 저널 기준점
 
     ## 15. 상태 값
 
     | 대상 | 값 | 비고 |
     | --- | --- | --- |
-    | 계정 | `pending_verification`, `active`, `suspended`, `deactivated`, `deleted` | FR-USER-004 예시 집합. 최종 집합은 별도 승인 |
+    | 계정 | `pending_verification`, `active`, `suspended`, `deactivated` | 탈퇴 시 행 삭제. 폐기한 DB 상태 키 5는 재사용하지 않음 |
     | 테넌트 | `active`, `suspended`, `deactivated` | |
     | 멤버십 | `pre_registered`, `active`, `suspended`, `removed` | `suspended`는 비활성화, `removed`는 해지 |
     | Application, TenantApplication | `active`, `inactive` | 목록에는 TenantApplication 레코드가 없는 상태를 `not_enabled`로 표시 |
@@ -624,7 +623,7 @@ tags:
 - name: Tenant OIDC
   description: 테넌트 OIDC 설정
 - name: Members
-  description: 테넌트 멤버십, 관리자 MFA 초기화, 탈퇴 구성원 보관 정보
+  description: 테넌트 멤버십과 관리자 MFA 초기화
 - name: Tenant Applications
   description: 테넌트별 SaaS 이용 관계
 - name: Platform Admin
@@ -1056,8 +1055,8 @@ paths:
       tags: [Me]
       summary: 현재 사용자 프로필 수정
       description: |
-        표시 이름과 선택 항목(전화번호, 실명)을 수정한다. 선택 항목에 `null`을 보내면 삭제한다.
-        이메일 변경은 P0 범위가 아니다. 프로필 사진은 `PUT /users/me/avatar`로 바꾼다.
+        표시 이름과 선택 항목(이름, 성)을 수정한다. 선택 항목에 `null`을 보내면 삭제한다.
+        이메일 변경은 P0 범위가 아니다.
       x-requirements: [FR-USER-002, FR-USER-002-01, NFR-SEC-006, NFR-OPS-002-03]
       x-audit-event: user.profile_updated
       parameters:
@@ -1093,107 +1092,6 @@ paths:
           $ref: '#/components/responses/PreconditionRequired'
         '503':
           $ref: '#/components/responses/SecurityChangeUnavailable'
-
-  /api/v1/users/me/avatar:
-    put:
-      operationId: uploadMyAvatar
-      tags: [Me]
-      summary: 프로필 사진 등록·교체
-      description: |
-        **[제안]** PNG, JPEG, WebP만 받으며 최대 2 MiB다. 서버가 메타데이터를 제거하고 정사각형으로 다시 인코딩한다.
-        교체하면 이전 사진은 삭제한다.
-      x-requirements: [FR-USER-002, NFR-OPS-002-03]
-      x-audit-event: user.avatar_updated
-      parameters:
-        - $ref: '#/components/parameters/IdempotencyKeyRequired'
-        - $ref: '#/components/parameters/RequestId'
-        - $ref: '#/components/parameters/Activity'
-      requestBody:
-        required: true
-        content:
-          multipart/form-data:
-            schema:
-              type: object
-              required: [file]
-              properties:
-                file:
-                  type: string
-                  contentMediaType: application/octet-stream
-            encoding:
-              file:
-                contentType: image/png, image/jpeg, image/webp
-      responses:
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '200':
-          description: 등록 결과
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/AvatarResponse'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '413':
-          $ref: '#/components/responses/PayloadTooLarge'
-        '415':
-          $ref: '#/components/responses/UnsupportedMediaType'
-        '503':
-          $ref: '#/components/responses/SecurityChangeUnavailable'
-
-
-    delete:
-      operationId: deleteMyAvatar
-      tags: [Me]
-      summary: 프로필 사진 삭제
-      x-requirements: [FR-USER-002, NFR-OPS-002-03]
-      x-audit-event: user.avatar_deleted
-      parameters:
-        - $ref: '#/components/parameters/IdempotencyKeyRequired'
-        - $ref: '#/components/parameters/RequestId'
-        - $ref: '#/components/parameters/Activity'
-      responses:
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '204':
-          $ref: '#/components/responses/NoContent'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '503':
-          $ref: '#/components/responses/SecurityChangeUnavailable'
-
-  /api/v1/avatars/{avatar_id}:
-    get:
-      operationId: getAvatar
-      tags: [Me]
-      summary: 프로필 사진 이미지
-      description: |
-        `<img>` 태그에서 Bearer 헤더를 보낼 수 없으므로 인증 없이 제공한다.
-        `avatar_id`는 추측할 수 없는 값이고, 사진을 교체·삭제하거나 탈퇴하면 즉시 무효화된다.
-        URL은 열람 권한이 있는 응답(6장)에만 포함된다.
-      security: []
-      x-requirements: [FR-USER-002, FR-USER-002-02, FR-USER-005]
-      parameters:
-        - name: avatar_id
-          in: path
-          required: true
-          schema:
-            type: string
-            pattern: '^[A-Za-z0-9_-]{22,64}$'
-      responses:
-        '200':
-          description: 이미지
-          headers:
-            Cache-Control:
-              description: '`private, max-age=3600`'
-              schema:
-                type: string
-          content:
-            image/webp:
-              schema:
-                type: string
-                contentMediaType: image/webp
-        '404':
-          $ref: '#/components/responses/NotFound'
 
   /api/v1/users/me/password:
     post:
@@ -1313,10 +1211,10 @@ paths:
       summary: 계정 탈퇴
       description: |
         최근 재인증이 필요하다(5장). 확정하면 유예기간 없이 즉시 탈퇴하며, 취소와 복구는 없다(FR-USER-005).
-        - 계정을 `deleted`로 바꾸고 모든 로그인과 토큰을 종료한다.
-        - 인증 수단을 무효화하고 모든 멤버십을 `removed`로 바꾼다. 멤버십 종료는 접근 자격 변경이므로 8장 규약을 따른다.
-        - 프로필 사진과 과거 해지 멤버십까지 포함한 사전 등록 이메일을 즉시 삭제한다. 이메일·표시 이름·전화번호·실명은 24시간 보관 후 삭제한다.
-        - 최초 요청 전에 클라이언트가 만든 Withdrawal-Receipt를 필수로 받는다. 원 사용자·멱등 키·본문에 해시를 바인딩해 같은 탈퇴 트랜잭션에서 저장한다.
+        - `users` 행과 직접·간접 FK로 연결된 모든 자손을 같은 트랜잭션에서 물리 삭제한다. 기존 사용자 ID를 재사용하지 않는다.
+        - 인증 정보·과거 해지 멤버십·종료 로그인·토큰·MFA 요청과 처리 이력을 삭제한다. 처리자 FK로 연결된 다른 사용자의 MFA 요청도 삭제한다. 테넌트·서비스·OIDC 설정은 유지하며 접근 자격 변경의 완료 조건은 8장 규약을 따른다.
+        - 같은 이메일의 미활성 사전 등록을 명시적으로 삭제하며 개인정보를 추가 보관하지 않는다. `audit_logs`는 사용자 FK 없이 유지하고 기존 사용자 ID·탈퇴 시각·삭제 결과를 개인정보 값 없이 기록한다.
+        - 최초 요청 전에 클라이언트가 만든 Withdrawal-Receipt를 필수로 받는다. 원 사용자 ID·멱등 키·본문에 해시를 바인딩해 같은 탈퇴 트랜잭션에서 저장한다. 원 탈퇴 완료 확인·동기화·보안 기록은 사용자 FK 없이 보존하며 삭제된 사용자 프로필을 담은 기존 멱등 응답은 제거한다.
         - 로그인 종료 후 응답 유실·503이면 전용 completeWithdrawal 경로를 사용한다. 완료 키의 수명은 DB 커밋부터 24시간이다.
         - **[제안]** 어떤 테넌트의 마지막 관리자이면 `409 last_tenant_admin`이고, 해당 `tenant_ids`를 함께 반환한다(16장 4번).
       x-requirements:
@@ -1395,7 +1293,7 @@ paths:
       operationId: listMyIdentities
       tags: [Identities]
       summary: 연결된 인증 수단 목록
-      description: Local 자격 증명과 외부 신원을 프로필과 분리해 보여준다(FR-USER-007). 외부 신원은 `(issuer, subject)`로 식별한다(FR-OIDC-004).
+      description: Local 인증 수단의 유무와 연결된 외부 신원을 보여주며 인증 비밀값은 포함하지 않는다(FR-USER-007). 외부 신원은 `(issuer, subject)`로 식별한다(FR-OIDC-004).
       x-requirements: [FR-USER-006, FR-USER-007, FR-OIDC-004]
       parameters:
         - $ref: '#/components/parameters/RequestId'
@@ -2012,7 +1910,7 @@ paths:
 
         | 보는 사람 | 항목 | 볼 수 있는 상태 | `q` 검색 대상 |
         | --- | --- | --- | --- |
-        | `admin` | `MemberAdminView` | 모든 상태 | 이메일, 표시 이름, 실명 |
+        | `admin` | `MemberAdminView` | 모든 상태 | 이메일, 표시 이름, 이름, 성 |
         | `member` | `MemberPeerView` | `active`만 | 표시 이름 |
       x-requirements: [FR-MEM-003, FR-USER-002-02, FR-WEB-004, NFR-SEC-004]
       parameters:
@@ -2344,84 +2242,6 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
-        '422':
-          $ref: '#/components/responses/ValidationFailed'
-
-  /api/v1/tenants/{tenant_id}/withdrawn-members:
-    get:
-      operationId: listWithdrawnMembers
-      tags: [Members]
-      summary: 탈퇴 구성원 목록(보관 기간 내)
-      description: |
-        테넌트 `admin` 전용이다. 탈퇴 시점에 이 테넌트 소속이었고 보관 기간(24시간)이 남은 사용자만 나온다.
-        목록에는 보관 정보를 넣지 않는다. 열람은 `accessRetainedProfile`로 한다(FR-USER-005-01).
-        `email`은 정확히 일치하는 값으로만 찾는다.
-      x-requirements: [FR-USER-005-01]
-      parameters:
-        - $ref: '#/components/parameters/TenantIdPath'
-        - $ref: '#/components/parameters/RequestId'
-        - $ref: '#/components/parameters/Activity'
-        - $ref: '#/components/parameters/Limit'
-        - $ref: '#/components/parameters/Cursor'
-        - name: email
-          in: query
-          schema:
-            type: string
-            format: email
-            maxLength: 254
-      responses:
-        '200':
-          description: 탈퇴 구성원 목록
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/WithdrawnUserPage'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/TenantForbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-
-  /api/v1/tenants/{tenant_id}/withdrawn-members/{user_id}/retained-profile-access:
-    post:
-      operationId: accessRetainedProfile
-      tags: [Members]
-      summary: 탈퇴 구성원 보관 정보 열람(테넌트 관리자)
-      description: |
-        현재 권한 있는 테넌트 `admin`이 목적과 사유를 밝히고 보관 정보(이메일, 표시 이름, 전화번호, 실명)를 열람한다.
-        - 조회자·대상·목적·사유를 감사 기록한다.
-        - 다음 경우는 `404`이다: 보관 기간이 지났을 때, 탈퇴 시점에 이 테넌트 소속이 아니었을 때.
-        - 조회 자체가 감사 대상인 작업이므로 GET이 아닌 POST로 둔다.
-      x-requirements: [FR-USER-005, FR-USER-005-01, NFR-SEC-007, SC-06]
-      x-audit-event: user.retained_profile_accessed
-      parameters:
-        - $ref: '#/components/parameters/TenantIdPath'
-        - $ref: '#/components/parameters/UserIdPath'
-        - $ref: '#/components/parameters/RequestId'
-        - $ref: '#/components/parameters/Activity'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/RetainedProfileAccessRequest'
-      responses:
-        '200':
-          description: 보관 정보
-          headers:
-            Cache-Control:
-              $ref: '#/components/headers/NoStore'
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/RetainedProfile'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/TenantForbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
         '422':
           $ref: '#/components/responses/ValidationFailed'
 
@@ -2888,8 +2708,8 @@ paths:
       tags: [Platform Admin]
       summary: 사용자 검색(플랫폼 관리자)
       description: |
-        `q`는 이메일과 표시 이름을 검색한다. 플랫폼 관리자는 이메일·표시 이름·프로필 사진만 열람한다.
-        실명·전화번호는 반환하지 않는다(FR-USER-002-02).
+        `q`는 이메일과 표시 이름을 검색한다. 플랫폼 관리자는 이메일·표시 이름만 열람한다.
+        이름·성은 반환하지 않는다(FR-USER-002-02).
       x-requirements: [FR-USER-002-02, FR-WEB-006]
       x-audit-event: admin.users_searched
       parameters:
@@ -2958,7 +2778,7 @@ paths:
         Refresh Token을 폐기하고 Access Token을 즉시 철회한다(FR-AUTH-009-05-03, 009-06-02).
         - `active`로 재활성화해도 기존 로그인은 복원하지 않으며, 재로그인을 요구한다.
         - 철회 상태 반영은 접근 자격 변경과 같은 8장 규약을 따른다.
-        - `deleted`(탈퇴) 계정은 바꿀 수 없다(`409 conflict`).
+        - 탈퇴한 계정은 행이 없으므로 `404 not_found`이다.
         - 본인 계정은 바꿀 수 없다(`403 self_action_forbidden`).
       x-requirements: [FR-AUTH-005, FR-AUTH-009-05-03, FR-AUTH-009-06-02, FR-USER-004, NFR-OPS-002-03]
       x-audit-event: user.status_changed
@@ -3004,73 +2824,6 @@ paths:
           $ref: '#/components/responses/PreconditionRequired'
         '503':
           $ref: '#/components/responses/SecurityChangeUnavailable'
-
-  /api/v1/admin/withdrawn-users:
-    get:
-      operationId: adminListWithdrawnUsers
-      tags: [Platform Admin]
-      summary: 탈퇴 사용자 목록(보관 기간 내)
-      description: 보관 기간이 남은 탈퇴 사용자만 나온다. 보관 정보는 넣지 않는다. `email`은 정확히 일치하는 값으로만 찾는다.
-      x-requirements: [FR-USER-005-01]
-      parameters:
-        - $ref: '#/components/parameters/RequestId'
-        - $ref: '#/components/parameters/Activity'
-        - $ref: '#/components/parameters/Limit'
-        - $ref: '#/components/parameters/Cursor'
-        - name: email
-          in: query
-          schema:
-            type: string
-            format: email
-            maxLength: 254
-      responses:
-        '200':
-          description: 탈퇴 사용자 목록
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/WithdrawnUserPage'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-
-  /api/v1/admin/withdrawn-users/{user_id}/retained-profile-access:
-    post:
-      operationId: adminAccessRetainedProfile
-      tags: [Platform Admin]
-      summary: 탈퇴 사용자 보관 정보 열람(플랫폼 관리자)
-      description: '`accessRetainedProfile`과 같은 규칙이다. 목적·사유를 받아 감사 기록하고, 보관 기간이 지나면 `404`이다.'
-      x-requirements: [FR-USER-005-01, NFR-SEC-007]
-      x-audit-event: user.retained_profile_accessed
-      parameters:
-        - $ref: '#/components/parameters/UserIdPath'
-        - $ref: '#/components/parameters/RequestId'
-        - $ref: '#/components/parameters/Activity'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/RetainedProfileAccessRequest'
-      responses:
-        '200':
-          description: 보관 정보
-          headers:
-            Cache-Control:
-              $ref: '#/components/headers/NoStore'
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/RetainedProfile'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '422':
-          $ref: '#/components/responses/ValidationFailed'
 
   /api/v1/admin/mfa-reset-requests:
     get:
@@ -3484,7 +3237,7 @@ paths:
       summary: 테넌트 구성원 목록(SaaS)
       description: |
         이용 자격이 있는 테넌트의 `active` 구성원만 나온다.
-        반환 필드는 식별자, 이메일, 표시 이름, 프로필 사진, 역할이다. 실명·전화번호는 반환하지 않는다(FR-USER-002-02).
+        반환 필드는 식별자, 이메일, 표시 이름, 역할이다. 이름·성은 반환하지 않는다(FR-USER-002-02).
         `q`는 이메일과 표시 이름을 검색한다.
       security:
         - serviceBasic: []
@@ -4451,139 +4204,6 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/UserUpdateRequest'
-
-  /sso/api/v1/users/me/avatar:
-    put:
-      operationId: ssoUploadMyAvatar
-      tags:
-      - SSO
-      summary: 'SSO: 프로필 사진 등록·교체'
-      description: 고정된 PUT /api/v1/users/me/avatar(uploadMyAvatar)의 브라우저용 계약이다. 원 API의 필드·권한·테넌트·MFA·오류 계약을 그대로
-        적용하며 SSO가 서버에서 저장된 토큰을 붙인다. 브라우저 Authorization·Cookie를 그대로 전달하거나 임의 API로 중계하지 않는다. 변경 요청은 자기 Origin·CSRF를
-        검증한다. 토큰 발급·갱신은 SSO 내부에서만 처리한다.
-      security:
-      - ssoSessionCookie: []
-        csrfHeader: []
-      x-sso-upstream:
-        method: PUT
-        path: /api/v1/users/me/avatar
-      x-requirements:
-      - FR-USER-002
-      - FR-AUTH-009-02-01
-      - FR-AUTH-009-02-04
-      - NFR-OPS-002-03
-      responses:
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '200':
-          description: 등록 결과
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/AvatarResponse'
-        '401':
-          $ref: '#/components/responses/SsoUnauthorized'
-        '413':
-          $ref: '#/components/responses/PayloadTooLarge'
-        '415':
-          $ref: '#/components/responses/UnsupportedMediaType'
-        '503':
-          $ref: '#/components/responses/SecurityChangeUnavailable'
-
-      parameters:
-      - $ref: '#/components/parameters/IdempotencyKeyRequired'
-      - $ref: '#/components/parameters/RequestId'
-      - $ref: '#/components/parameters/Activity'
-      requestBody:
-        required: true
-        content:
-          multipart/form-data:
-            schema:
-              type: object
-              required:
-              - file
-              properties:
-                file:
-                  type: string
-                  contentMediaType: application/octet-stream
-            encoding:
-              file:
-                contentType: image/png, image/jpeg, image/webp
-    delete:
-      operationId: ssoDeleteMyAvatar
-      tags:
-      - SSO
-      summary: 'SSO: 프로필 사진 삭제'
-      description: 고정된 DELETE /api/v1/users/me/avatar(deleteMyAvatar)의 브라우저용 계약이다. 원 API의 필드·권한·테넌트·MFA·오류 계약을
-        그대로 적용하며 SSO가 서버에서 저장된 토큰을 붙인다. 브라우저 Authorization·Cookie를 그대로 전달하거나 임의 API로 중계하지 않는다. 변경 요청은 자기 Origin·CSRF를
-        검증한다. 토큰 발급·갱신은 SSO 내부에서만 처리한다.
-      security:
-      - ssoSessionCookie: []
-        csrfHeader: []
-      x-sso-upstream:
-        method: DELETE
-        path: /api/v1/users/me/avatar
-      x-requirements:
-      - FR-USER-002
-      - FR-AUTH-009-02-01
-      - FR-AUTH-009-02-04
-      - NFR-OPS-002-03
-      responses:
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '204':
-          $ref: '#/components/responses/NoContent'
-        '401':
-          $ref: '#/components/responses/SsoUnauthorized'
-        '503':
-          $ref: '#/components/responses/SecurityChangeUnavailable'
-
-      parameters:
-      - $ref: '#/components/parameters/IdempotencyKeyRequired'
-      - $ref: '#/components/parameters/RequestId'
-      - $ref: '#/components/parameters/Activity'
-
-  /sso/api/v1/avatars/{avatar_id}:
-    get:
-      operationId: ssoGetAvatar
-      tags:
-      - SSO
-      summary: 'SSO: 프로필 사진 이미지'
-      description: 고정된 GET /api/v1/avatars/{avatar_id}(getAvatar)의 브라우저용 계약이다. 원 API의 필드·권한·테넌트·MFA·오류 계약을 그대로
-        적용하며 SSO가 서버에서 저장된 토큰을 붙인다. 브라우저 Authorization·Cookie를 그대로 전달하거나 임의 API로 중계하지 않는다. 변경 요청은 자기 Origin·CSRF를
-        검증한다. 토큰 발급·갱신은 SSO 내부에서만 처리한다.
-      security: []
-      x-sso-upstream:
-        method: GET
-        path: /api/v1/avatars/{avatar_id}
-      x-requirements:
-      - FR-USER-002
-      - FR-USER-002-02
-      - FR-USER-005
-      - FR-AUTH-009-02-01
-      - FR-AUTH-009-02-04
-      responses:
-        '200':
-          description: 이미지
-          headers:
-            Cache-Control:
-              description: '`private, max-age=3600`'
-              schema:
-                type: string
-          content:
-            image/webp:
-              schema:
-                type: string
-                contentMediaType: image/webp
-        '404':
-          $ref: '#/components/responses/NotFound'
-      parameters:
-      - name: avatar_id
-        in: path
-        required: true
-        schema:
-          type: string
-          pattern: ^[A-Za-z0-9_-]{22,64}$
 
   /sso/api/v1/users/me/password:
     post:
@@ -5955,102 +5575,6 @@ paths:
             schema:
               $ref: '#/components/schemas/MfaResetRejection'
 
-  /sso/api/v1/tenants/{tenant_id}/withdrawn-members:
-    get:
-      operationId: ssoListWithdrawnMembers
-      tags:
-      - SSO
-      summary: 'SSO: 탈퇴 구성원 목록(보관 기간 내)'
-      description: 고정된 GET /api/v1/tenants/{tenant_id}/withdrawn-members(listWithdrawnMembers)의 브라우저용 계약이다. 원
-        API의 필드·권한·테넌트·MFA·오류 계약을 그대로 적용하며 SSO가 서버에서 저장된 토큰을 붙인다. 브라우저 Authorization·Cookie를 그대로 전달하거나 임의 API로
-        중계하지 않는다. 변경 요청은 자기 Origin·CSRF를 검증한다. 토큰 발급·갱신은 SSO 내부에서만 처리한다.
-      security:
-      - ssoSessionCookie: []
-      x-sso-upstream:
-        method: GET
-        path: /api/v1/tenants/{tenant_id}/withdrawn-members
-      x-requirements:
-      - FR-USER-005-01
-      - FR-AUTH-009-02-01
-      - FR-AUTH-009-02-04
-      responses:
-        '200':
-          description: 탈퇴 구성원 목록
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/WithdrawnUserPage'
-        '401':
-          $ref: '#/components/responses/SsoUnauthorized'
-        '403':
-          $ref: '#/components/responses/TenantForbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-      parameters:
-      - $ref: '#/components/parameters/TenantIdPath'
-      - $ref: '#/components/parameters/RequestId'
-      - $ref: '#/components/parameters/Activity'
-      - $ref: '#/components/parameters/Limit'
-      - $ref: '#/components/parameters/Cursor'
-      - name: email
-        in: query
-        schema:
-          type: string
-          format: email
-          maxLength: 254
-
-  /sso/api/v1/tenants/{tenant_id}/withdrawn-members/{user_id}/retained-profile-access:
-    post:
-      operationId: ssoAccessRetainedProfile
-      tags:
-      - SSO
-      summary: 'SSO: 탈퇴 구성원 보관 정보 열람(테넌트 관리자)'
-      description: 고정된 POST /api/v1/tenants/{tenant_id}/withdrawn-members/{user_id}/retained-profile-access(accessRetainedProfile)의
-        브라우저용 계약이다. 원 API의 필드·권한·테넌트·MFA·오류 계약을 그대로 적용하며 SSO가 서버에서 저장된 토큰을 붙인다. 브라우저 Authorization·Cookie를 그대로
-        전달하거나 임의 API로 중계하지 않는다. 변경 요청은 자기 Origin·CSRF를 검증한다. 토큰 발급·갱신은 SSO 내부에서만 처리한다.
-      security:
-      - ssoSessionCookie: []
-        csrfHeader: []
-      x-sso-upstream:
-        method: POST
-        path: /api/v1/tenants/{tenant_id}/withdrawn-members/{user_id}/retained-profile-access
-      x-requirements:
-      - FR-USER-005
-      - FR-USER-005-01
-      - NFR-SEC-007
-      - SC-06
-      - FR-AUTH-009-02-01
-      - FR-AUTH-009-02-04
-      responses:
-        '200':
-          description: 보관 정보
-          headers:
-            Cache-Control:
-              $ref: '#/components/headers/NoStore'
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/RetainedProfile'
-        '401':
-          $ref: '#/components/responses/SsoUnauthorized'
-        '403':
-          $ref: '#/components/responses/TenantForbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '422':
-          $ref: '#/components/responses/ValidationFailed'
-      parameters:
-      - $ref: '#/components/parameters/TenantIdPath'
-      - $ref: '#/components/parameters/UserIdPath'
-      - $ref: '#/components/parameters/RequestId'
-      - $ref: '#/components/parameters/Activity'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/RetainedProfileAccessRequest'
-
   /sso/api/v1/tenants/{tenant_id}/applications:
     get:
       operationId: ssoListTenantApplications
@@ -6813,96 +6337,6 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/UserStatusUpdate'
-
-  /sso/api/v1/admin/withdrawn-users:
-    get:
-      operationId: ssoAdminListWithdrawnUsers
-      tags:
-      - SSO
-      summary: 'SSO: 탈퇴 사용자 목록(보관 기간 내)'
-      description: 고정된 GET /api/v1/admin/withdrawn-users(adminListWithdrawnUsers)의 브라우저용 계약이다. 원 API의 필드·권한·테넌트·MFA·오류
-        계약을 그대로 적용하며 SSO가 서버에서 저장된 토큰을 붙인다. 브라우저 Authorization·Cookie를 그대로 전달하거나 임의 API로 중계하지 않는다. 변경 요청은 자기
-        Origin·CSRF를 검증한다. 토큰 발급·갱신은 SSO 내부에서만 처리한다.
-      security:
-      - ssoSessionCookie: []
-      x-sso-upstream:
-        method: GET
-        path: /api/v1/admin/withdrawn-users
-      x-requirements:
-      - FR-USER-005-01
-      - FR-AUTH-009-02-01
-      - FR-AUTH-009-02-04
-      responses:
-        '200':
-          description: 탈퇴 사용자 목록
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/WithdrawnUserPage'
-        '401':
-          $ref: '#/components/responses/SsoUnauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-      parameters:
-      - $ref: '#/components/parameters/RequestId'
-      - $ref: '#/components/parameters/Activity'
-      - $ref: '#/components/parameters/Limit'
-      - $ref: '#/components/parameters/Cursor'
-      - name: email
-        in: query
-        schema:
-          type: string
-          format: email
-          maxLength: 254
-
-  /sso/api/v1/admin/withdrawn-users/{user_id}/retained-profile-access:
-    post:
-      operationId: ssoAdminAccessRetainedProfile
-      tags:
-      - SSO
-      summary: 'SSO: 탈퇴 사용자 보관 정보 열람(플랫폼 관리자)'
-      description: 고정된 POST /api/v1/admin/withdrawn-users/{user_id}/retained-profile-access(adminAccessRetainedProfile)의
-        브라우저용 계약이다. 원 API의 필드·권한·테넌트·MFA·오류 계약을 그대로 적용하며 SSO가 서버에서 저장된 토큰을 붙인다. 브라우저 Authorization·Cookie를 그대로
-        전달하거나 임의 API로 중계하지 않는다. 변경 요청은 자기 Origin·CSRF를 검증한다. 토큰 발급·갱신은 SSO 내부에서만 처리한다.
-      security:
-      - ssoSessionCookie: []
-        csrfHeader: []
-      x-sso-upstream:
-        method: POST
-        path: /api/v1/admin/withdrawn-users/{user_id}/retained-profile-access
-      x-requirements:
-      - FR-USER-005-01
-      - NFR-SEC-007
-      - FR-AUTH-009-02-01
-      - FR-AUTH-009-02-04
-      responses:
-        '200':
-          description: 보관 정보
-          headers:
-            Cache-Control:
-              $ref: '#/components/headers/NoStore'
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/RetainedProfile'
-        '401':
-          $ref: '#/components/responses/SsoUnauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '422':
-          $ref: '#/components/responses/ValidationFailed'
-      parameters:
-      - $ref: '#/components/parameters/UserIdPath'
-      - $ref: '#/components/parameters/RequestId'
-      - $ref: '#/components/parameters/Activity'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/RetainedProfileAccessRequest'
 
   /sso/api/v1/admin/mfa-reset-requests:
     get:
@@ -7782,18 +7216,6 @@ components:
             status: 428
             code: precondition_required
             request_id: req_01JBX4T9Q2
-    PayloadTooLarge:
-      description: 업로드 크기 초과
-      content:
-        application/problem+json:
-          schema:
-            $ref: '#/components/schemas/Problem'
-    UnsupportedMediaType:
-      description: 허용하지 않는 형식
-      content:
-        application/problem+json:
-          schema:
-            $ref: '#/components/schemas/Problem'
     ValidationFailed:
       description: 입력 검증 실패(`validation_failed`, `idempotency_key_reused`)
       content:
@@ -8041,7 +7463,6 @@ components:
             user_id: 0193a3b0-aaaa-7bbb-8ccc-0d0e0f101112
             email: kim@acme.example
             display_name: Kim
-            avatar_url: https://passport.example.com/api/v1/avatars/Zx8kQ2pL0aN5vR7tY3uW1e
           tenant:
             tenant_id: 0193a3c1-7c2e-7d11-9a40-5b1e2f3a4b5c
             code: acme
@@ -8191,8 +7612,6 @@ components:
       - totp_already_enrolled
       - local_credential_not_set
       - precondition_failed
-      - payload_too_large
-      - unsupported_media_type
       - validation_failed
       - invalid_otp
       - idempotency_key_reused
@@ -8530,10 +7949,10 @@ components:
     # ---------- 사용자 ----------
     UserStatus:
       type: string
-      enum: [pending_verification, active, suspended, deactivated, deleted]
+      enum: [pending_verification, active, suspended, deactivated]
     UserSelf:
       type: object
-      required: [user_id, status, email, email_verified, display_name, avatar_url, phone, real_name, platform_roles, created_at]
+      required: [user_id, status, email, email_verified, display_name, fist_name, last_name, platform_roles, created_at]
       properties:
         user_id:
           $ref: '#/components/schemas/Uuid'
@@ -8545,15 +7964,14 @@ components:
           type: boolean
         display_name:
           $ref: '#/components/schemas/DisplayName'
-        avatar_url:
+        fist_name:
           type: [string, 'null']
-          format: uri
-        phone:
+          maxLength: 50
+          description: 선택 실명 항목인 이름. 요청한 필드명을 그대로 사용한다
+        last_name:
           type: [string, 'null']
-          pattern: '^\+[1-9][0-9]{6,14}$'
-        real_name:
-          type: [string, 'null']
-          maxLength: 100
+          maxLength: 50
+          description: 선택 실명 항목인 성
         platform_roles:
           type: array
           items:
@@ -8567,9 +7985,8 @@ components:
           email: kim@acme.example
           email_verified: true
           display_name: Kim
-          avatar_url: https://passport.example.com/api/v1/avatars/Zx8kQ2pL0aN5vR7tY3uW1e
-          phone: '+821012345678'
-          real_name: 김하늘
+          fist_name: 하늘
+          last_name: 김
           platform_roles: []
           created_at: '2026-10-01T02:00:00Z'
     UserUpdateRequest:
@@ -8579,23 +7996,20 @@ components:
       properties:
         display_name:
           $ref: '#/components/schemas/DisplayName'
-        phone:
-          type: [string, 'null']
-          pattern: '^\+[1-9][0-9]{6,14}$'
-        real_name:
+        fist_name:
           type: [string, 'null']
           minLength: 1
-          maxLength: 100
+          maxLength: 50
+          description: 이름. null이면 삭제
+        last_name:
+          type: [string, 'null']
+          minLength: 1
+          maxLength: 50
+          description: 성. null이면 삭제
       examples:
         - display_name: Haneul
-          phone: null
-    AvatarResponse:
-      type: object
-      required: [avatar_url]
-      properties:
-        avatar_url:
-          type: string
-          format: uri
+          fist_name: 하늘
+          last_name: 김
     PasswordChangeRequest:
       type: object
       additionalProperties: false
@@ -9153,7 +8567,7 @@ components:
           enum: [active, suspended]
     MemberAdminView:
       type: object
-      required: [view, membership_id, user_id, role, status, email, display_name, avatar_url, phone, real_name, mfa_totp_enrolled, joined_at, created_at, updated_at, etag]
+      required: [view, membership_id, user_id, role, status, email, display_name, fist_name, last_name, mfa_totp_enrolled, joined_at, created_at, updated_at, etag]
       properties:
         view:
           type: string
@@ -9172,13 +8586,14 @@ components:
           $ref: '#/components/schemas/Email'
         display_name:
           type: [string, 'null']
-        avatar_url:
+        fist_name:
           type: [string, 'null']
-          format: uri
-        phone:
+          maxLength: 50
+          description: 이름
+        last_name:
           type: [string, 'null']
-        real_name:
-          type: [string, 'null']
+          maxLength: 50
+          description: 성
         mfa_totp_enrolled:
           type: boolean
           description: 이 테넌트의 TOTP 등록 여부
@@ -9200,9 +8615,8 @@ components:
           status: active
           email: kim@acme.example
           display_name: Kim
-          avatar_url: null
-          phone: '+821012345678'
-          real_name: 김하늘
+          fist_name: 하늘
+          last_name: 김
           mfa_totp_enrolled: true
           joined_at: '2026-10-02T00:00:00Z'
           created_at: '2026-10-01T00:00:00Z'
@@ -9210,7 +8624,7 @@ components:
           etag: '"3"'
     MemberPeerView:
       type: object
-      required: [view, membership_id, user_id, role, display_name, avatar_url]
+      required: [view, membership_id, user_id, role, display_name]
       properties:
         view:
           type: string
@@ -9223,9 +8637,6 @@ components:
           $ref: '#/components/schemas/TenantRole'
         display_name:
           $ref: '#/components/schemas/DisplayName'
-        avatar_url:
-          type: [string, 'null']
-          format: uri
     MemberView:
       oneOf:
         - $ref: '#/components/schemas/MemberAdminView'
@@ -9245,62 +8656,6 @@ components:
             $ref: '#/components/schemas/MemberView'
         next_cursor:
           $ref: '#/components/schemas/NextCursor'
-
-    # ---------- 탈퇴 보관 정보 ----------
-    WithdrawnUser:
-      type: object
-      required: [user_id, withdrawn_at, retention_expires_at]
-      properties:
-        user_id:
-          $ref: '#/components/schemas/Uuid'
-        withdrawn_at:
-          $ref: '#/components/schemas/Timestamp'
-        retention_expires_at:
-          $ref: '#/components/schemas/Timestamp'
-    WithdrawnUserPage:
-      type: object
-      required: [items, next_cursor]
-      properties:
-        items:
-          type: array
-          items:
-            $ref: '#/components/schemas/WithdrawnUser'
-        next_cursor:
-          $ref: '#/components/schemas/NextCursor'
-    RetainedProfileAccessRequest:
-      type: object
-      additionalProperties: false
-      required: [purpose, reason]
-      properties:
-        purpose:
-          type: string
-          enum: [customer_inquiry, dispute_resolution, security_incident, fraud_investigation]
-          description: FR-USER-005-01의 허용 목적
-        reason:
-          type: string
-          minLength: 10
-          maxLength: 500
-      examples:
-        - purpose: customer_inquiry
-          reason: 탈퇴 직후 결제 환불 문의(티켓 CS-2026-1031-07)
-    RetainedProfile:
-      type: object
-      required: [user_id, email, display_name, phone, real_name, withdrawn_at, retention_expires_at]
-      properties:
-        user_id:
-          $ref: '#/components/schemas/Uuid'
-        email:
-          $ref: '#/components/schemas/Email'
-        display_name:
-          $ref: '#/components/schemas/DisplayName'
-        phone:
-          type: [string, 'null']
-        real_name:
-          type: [string, 'null']
-        withdrawn_at:
-          $ref: '#/components/schemas/Timestamp'
-        retention_expires_at:
-          $ref: '#/components/schemas/Timestamp'
 
     # ---------- 테넌트 서비스 ----------
     TenantApplicationListStatus:
@@ -9356,8 +8711,8 @@ components:
     # ---------- 플랫폼 관리자 ----------
     PlatformUserView:
       type: object
-      required: [user_id, email, display_name, avatar_url, status, created_at]
-      description: 플랫폼 관리자 열람 범위(이메일·표시 이름·사진). 실명·전화번호 없음
+      required: [user_id, email, display_name, status, created_at]
+      description: 플랫폼 관리자 열람 범위(이메일·표시 이름). 이름·성 없음
       properties:
         user_id:
           $ref: '#/components/schemas/Uuid'
@@ -9365,9 +8720,6 @@ components:
           $ref: '#/components/schemas/Email'
         display_name:
           $ref: '#/components/schemas/DisplayName'
-        avatar_url:
-          type: [string, 'null']
-          format: uri
         status:
           $ref: '#/components/schemas/UserStatus'
         created_at:
@@ -9579,7 +8931,7 @@ components:
               format: date-time
     ServiceUserView:
       type: object
-      required: [user_id, email, display_name, avatar_url]
+      required: [user_id, email, display_name]
       description: 연동 SaaS 제공 필드(FR-USER-002-02)
       properties:
         user_id:
@@ -9588,9 +8940,6 @@ components:
           $ref: '#/components/schemas/Email'
         display_name:
           $ref: '#/components/schemas/DisplayName'
-        avatar_url:
-          type: [string, 'null']
-          format: uri
     ServiceTenant:
       type: object
       required: [tenant_id, code, name, status]
