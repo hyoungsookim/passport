@@ -45,13 +45,9 @@ class User(Base):
     )
     external_id: Mapped[str | None] = mapped_column(String(50))
     external_source: Mapped[str | None] = mapped_column(String(50))
-    version: Mapped[int] = mapped_column(server_default=text("1"))
 
     # eager_defaults: RETURNING the onupdate timestamp; async sessions cannot lazy-load it.
-    __mapper_args__: Mapping[str, Any] = {
-        "version_id_col": version,
-        "eager_defaults": True,
-    }
+    __mapper_args__: Mapping[str, Any] = {"eager_defaults": True}
 
 
 class UserSecurity(Base):

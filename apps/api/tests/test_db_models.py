@@ -68,10 +68,10 @@ def test_users_ddl():
         "updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, "
         "external_id VARCHAR(50), "
         "external_source VARCHAR(50), "
-        "version INTEGER DEFAULT 1 NOT NULL, "
         "CONSTRAINT pk_users PRIMARY KEY (user_id), "
         "CONSTRAINT uq_users_user_email UNIQUE (user_email) )"
     )
+    assert User.__mapper__.version_id_col is None
 
 
 def test_user_securities_ddl():

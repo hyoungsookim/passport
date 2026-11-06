@@ -252,15 +252,13 @@ info:
 
     ## 8. 동시성·재시도·부분 실패
 
-    - **낙관적 동시성**: 변경 가능한 리소스 응답에는 `ETag`가 있다. 그 리소스를 바꾸는 PUT/PATCH/DELETE는
-      `If-Match`가 필요하다. 없으면 `428 precondition_required`, 버전이 다르면 `412 precondition_failed`이다.
-      새로 만드는 PUT은 `If-None-Match: *`를 쓴다.
+    - **동시성**: 일반 수정은 나중에 커밋된 값을 반영한다. 보안 상태·접근 자격 변경은 관련 행 잠금과 현재 상태 재검증으로 처리한다.
+      단일 리소스를 생성·변경하는 PUT은 부모 테넌트 행을 잠근 뒤 현재 존재 여부에 따라 생성 또는 변경하며, UNIQUE 제약으로 중복을 막는다.
     - **멱등 키**: 생성 POST와 접근 자격·외부 보안 기록 대상 변경 API는 `Idempotency-Key`(1~128자, 클라이언트 생성 UUID 권장)를 받는다.
       - 접근 자격·외부 보안 기록 대상 변경 API에서는 필수이고, 없으면 `400 idempotency_key_required`이다.
       - 같은 키와 같은 본문이 다시 오면 처음 결과를 재생하고 `Idempotency-Replayed: true`를 붙인다.
       - 같은 키에 다른 본문이 오면 `422 idempotency_key_reused`이다.
       - **[제안]** 키는 24시간 보관한다.
-      - 멱등 키 확인은 `If-Match` 평가보다 먼저 한다. 그래서 커밋 후 재시도할 때 바뀐 ETag 때문에 실패하지 않는다.
     - **접근 자격 변경 API**(FR-APP-008): 멤버십 추가·상태 변경·제거, 테넌트 상태 변경, TenantApplication 변경, 계정 탈퇴.
       1. 9.4절 대상이면 외부 변경 의도 영속화를 확인한 뒤 상태 변경과 관련 `access_version` 증가를 한 DB 트랜잭션으로 커밋한다(FR-APP-008-06). 멤버 추가는 초기 버전 `1`을 기록한다. 탈퇴는 삭제할 멤버십의 직전 버전 + 1을 최종 무효화 버전으로 큐·외부 기록에 남기고 사용자 및 FK 자손을 삭제한다.
       2. 커밋 후 최신 버전을 Valkey 검증 경로에 반영한다. 삭제한 멤버십은 큐의 최종 무효화 버전을 사용하며 사용자·멤버십 행 없이도 재시도한다. 이전 버전으로 덮어쓰지 않는다(FR-APP-008-07).
@@ -317,10 +315,8 @@ info:
     | 409 | `identity_already_linked` | 외부 신원이 이미 다른 사용자에게 연결됨(FR-OIDC-005) |
     | 409 | `last_tenant_admin` | 마지막 관리자 제거·강등·탈퇴 |
     | 409 | `local_credential_not_set` | Local 비밀번호가 없는 계정 |
-    | 412 | `precondition_failed` | `If-Match` 불일치 |
     | 422 | `validation_failed` | 필드 검증 실패. `errors[]` 포함 |
     | 422 | `idempotency_key_reused` | 같은 키에 다른 본문 |
-    | 428 | `precondition_required` | `If-Match` 누락 |
     | 429 | `too_many_requests` | 속도 제한·실패 제한. `Retry-After` 포함 |
     | 503 | `access_sync_pending` | DB 저장 완료, Valkey 반영 미완료. 같은 멱등 키로 재시도. 탈퇴는 전용 완료 경로 |
     | 503 | `security_record_pending` | 외부 보안 기록 미완료. `db_committed`로 DB 반영 여부 구분. 원 요청의 안전한 재시도 |
@@ -426,7 +422,7 @@ info:
     5. `503 entitlement_unverifiable`이면 요청을 거부한다. 이전 캐시로 허용하지 않는다(FR-APP-008-03).
 
     **F-09 접근 자격 변경과 부분 실패 (FR-APP-008-06~09)**
-    - 관리자가 `DELETE /sso/api/v1/tenants/{tenant_id}/members/{membership_id}`를 `If-Match`·`Idempotency-Key`와 함께 호출한다.
+    - 관리자가 `DELETE /sso/api/v1/tenants/{tenant_id}/members/{membership_id}`를 `Idempotency-Key`와 함께 호출한다.
       - `204`이면 완료다.
       - `503 access_sync_pending`이면 같은 `Idempotency-Key`로 재시도한다.
     - 테넌트 상태 변경과 TenantApplication 변경도 같은 방식이다.
@@ -516,7 +512,6 @@ info:
     - `TenantMembership.user_id`는 필수 사용자 FK이며, 기존 계정 추가 시 `status = active`로 생성
     - `Application`: `audience`(= `code`), 서비스 자격 증명 해시
     - 로그인, 클라이언트별 Refresh Token 계열, SSO 세션·서버 측 토큰 저장 참조·무효화 연계, SSO 클라이언트·허용 redirect URI·일회용 인가 코드·PKCE, OIDC 로그인 트랜잭션, 링크 티켓, 이메일 확인 토큰, 멱등 키 저장소
-    - 모든 변경 가능 리소스의 버전(ETag 원천)
     - OIDC 트랜잭션의 브라우저 바인딩 해시, 검증된 외부 세션·토큰별 `oidc_login_bindings`
     - 사용자 행·직접/간접 FK 자손의 `ON DELETE CASCADE`, 감사로그 보존, 사용자 삭제 후에도 동작하는 최종 무효화 버전 큐
     - 원 탈퇴 멱등 키에 연결한 `withdrawal_receipts`(해시·24시간 만료, 사용자 FK 없음)
@@ -1000,9 +995,6 @@ paths:
       responses:
         '200':
           description: 현재 사용자
-          headers:
-            ETag:
-              $ref: '#/components/headers/ETag'
           content:
             application/json:
               schema:
@@ -1022,7 +1014,6 @@ paths:
         - $ref: '#/components/parameters/IdempotencyKeyRequired'
         - $ref: '#/components/parameters/RequestId'
         - $ref: '#/components/parameters/Activity'
-        - $ref: '#/components/parameters/IfMatch'
       requestBody:
         required: true
         content:
@@ -1034,21 +1025,14 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '200':
           description: 수정 결과
-          headers:
-            ETag:
-              $ref: '#/components/headers/ETag'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/UserSelf'
         '401':
           $ref: '#/components/responses/Unauthorized'
-        '412':
-          $ref: '#/components/responses/PreconditionFailed'
         '422':
           $ref: '#/components/responses/ValidationFailed'
-        '428':
-          $ref: '#/components/responses/PreconditionRequired'
         '503':
           $ref: '#/components/responses/SecurityChangeUnavailable'
 
@@ -1342,8 +1326,6 @@ paths:
               description: '`/api/v1/tenants/{tenant_id}`'
               schema:
                 type: string
-            ETag:
-              $ref: '#/components/headers/ETag'
           content:
             application/json:
               schema:
@@ -1371,9 +1353,6 @@ paths:
       responses:
         '200':
           description: 테넌트
-          headers:
-            ETag:
-              $ref: '#/components/headers/ETag'
           content:
             application/json:
               schema:
@@ -1397,7 +1376,6 @@ paths:
         - $ref: '#/components/parameters/TenantIdPath'
         - $ref: '#/components/parameters/RequestId'
         - $ref: '#/components/parameters/Activity'
-        - $ref: '#/components/parameters/IfMatch'
       requestBody:
         required: true
         content:
@@ -1407,9 +1385,6 @@ paths:
       responses:
         '200':
           description: 수정 결과
-          headers:
-            ETag:
-              $ref: '#/components/headers/ETag'
           content:
             application/json:
               schema:
@@ -1420,12 +1395,8 @@ paths:
           $ref: '#/components/responses/TenantForbidden'
         '404':
           $ref: '#/components/responses/NotFound'
-        '412':
-          $ref: '#/components/responses/PreconditionFailed'
         '422':
           $ref: '#/components/responses/ValidationFailed'
-        '428':
-          $ref: '#/components/responses/PreconditionRequired'
 
   /api/v1/tenants/{tenant_id}/oidc-configuration:
     get:
@@ -1443,9 +1414,6 @@ paths:
       responses:
         '200':
           description: OIDC 설정
-          headers:
-            ETag:
-              $ref: '#/components/headers/ETag'
           content:
             application/json:
               schema:
@@ -1462,7 +1430,7 @@ paths:
       summary: 테넌트 OIDC 설정 등록·변경·활성화·비활성화
       description: |
         테넌트당 설정은 하나이므로 단일 리소스로 관리한다(FR-OIDC-010). 테넌트 `admin`은 플랫폼 관리자 승인 없이 바꿀 수 있다(FR-TEN-009).
-        - 처음 만들 때는 `If-None-Match: *`, 바꿀 때는 `If-Match`를 보낸다.
+        - 테넌트 행을 잠근 뒤 현재 설정을 조회하여 생성 또는 변경한다.
         - `client_secret`은 쓰기 전용이다.
           - 처음 만들 때와 `issuer`·`client_id`를 바꿀 때는 필수다.
           - 그 외에는 생략하면 기존 값을 유지한다.
@@ -1482,8 +1450,6 @@ paths:
         - $ref: '#/components/parameters/TenantIdPath'
         - $ref: '#/components/parameters/RequestId'
         - $ref: '#/components/parameters/Activity'
-        - $ref: '#/components/parameters/IfMatchOptional'
-        - $ref: '#/components/parameters/IfNoneMatch'
       requestBody:
         required: true
         content:
@@ -1495,18 +1461,12 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '200':
           description: 변경 완료
-          headers:
-            ETag:
-              $ref: '#/components/headers/ETag'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/OidcConfigurationChangeResult'
         '201':
           description: 생성 완료
-          headers:
-            ETag:
-              $ref: '#/components/headers/ETag'
           content:
             application/json:
               schema:
@@ -1517,12 +1477,8 @@ paths:
           $ref: '#/components/responses/TenantForbidden'
         '404':
           $ref: '#/components/responses/NotFound'
-        '412':
-          $ref: '#/components/responses/PreconditionFailed'
         '422':
           $ref: '#/components/responses/ValidationFailed'
-        '428':
-          $ref: '#/components/responses/PreconditionRequired'
         '503':
           $ref: '#/components/responses/SecurityChangeUnavailable'
 
@@ -1604,8 +1560,6 @@ paths:
         '201':
           description: 멤버 추가 완료(DB 커밋과 Valkey 반영 완료)
           headers:
-            ETag:
-              $ref: '#/components/headers/ETag'
             Idempotency-Replayed:
               $ref: '#/components/headers/IdempotencyReplayed'
           content:
@@ -1644,9 +1598,6 @@ paths:
       responses:
         '200':
           description: 멤버
-          headers:
-            ETag:
-              $ref: '#/components/headers/ETag'
           content:
             application/json:
               schema:
@@ -1663,7 +1614,7 @@ paths:
       summary: 멤버 역할·상태 변경
       description: |
         테넌트 `admin`이 역할(`admin`/`member`)과 상태(`active`/`suspended`)를 바꾼다.
-        - 역할 또는 상태 변경은 access_version을 증가시키는 접근 자격 변경이다. 8장 규약(`If-Match`, `Idempotency-Key` 필수, `503 access_sync_pending`)을 따른다(FR-APP-008).
+        - 역할 또는 상태 변경은 access_version을 증가시키는 접근 자격 변경이다. 8장 규약(`Idempotency-Key` 필수, `503 access_sync_pending`)을 따른다(FR-APP-008).
         - **[제안]** 마지막 `active` 관리자를 강등하거나 비활성화하면 `409 last_tenant_admin`이다.
         - `removed` 멤버십은 바꿀 수 없다(`409 conflict`). 복구는 P1 재가입 신청·승인으로 한다(FR-MEM-008).
       x-requirements: [FR-MEM-003, FR-MEM-004, FR-APP-008-01, FR-APP-008-05, FR-APP-008-06, FR-APP-008-07, FR-APP-008-09, FR-WEB-004, SC-05, NFR-OPS-002-03]
@@ -1673,7 +1624,6 @@ paths:
         - $ref: '#/components/parameters/MembershipIdPath'
         - $ref: '#/components/parameters/RequestId'
         - $ref: '#/components/parameters/Activity'
-        - $ref: '#/components/parameters/IfMatch'
         - $ref: '#/components/parameters/IdempotencyKeyRequired'
       requestBody:
         required: true
@@ -1685,8 +1635,6 @@ paths:
         '200':
           description: 변경 완료(DB 커밋과 Valkey 반영 완료)
           headers:
-            ETag:
-              $ref: '#/components/headers/ETag'
             Idempotency-Replayed:
               $ref: '#/components/headers/IdempotencyReplayed'
           content:
@@ -1703,12 +1651,8 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
-        '412':
-          $ref: '#/components/responses/PreconditionFailed'
         '422':
           $ref: '#/components/responses/ValidationFailed'
-        '428':
-          $ref: '#/components/responses/PreconditionRequired'
         '503':
           $ref: '#/components/responses/SecurityChangeUnavailable'
     delete:
@@ -1727,7 +1671,6 @@ paths:
         - $ref: '#/components/parameters/MembershipIdPath'
         - $ref: '#/components/parameters/RequestId'
         - $ref: '#/components/parameters/Activity'
-        - $ref: '#/components/parameters/IfMatch'
         - $ref: '#/components/parameters/IdempotencyKeyRequired'
       responses:
         '204':
@@ -1745,10 +1688,6 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
-        '412':
-          $ref: '#/components/responses/PreconditionFailed'
-        '428':
-          $ref: '#/components/responses/PreconditionRequired'
         '503':
           $ref: '#/components/responses/SecurityChangeUnavailable'
 
@@ -1796,10 +1735,10 @@ paths:
       summary: 테넌트 서비스 활성화·중단
       description: |
         테넌트 `admin`이 `active` Application의 이 테넌트 이용 상태를 바꾼다. 플랫폼 관리자는 `adminPutTenantApplication`을 쓴다.
-        - 처음 활성화할 때는 `If-None-Match: *`, 바꿀 때는 `If-Match`를 보낸다.
+        - 테넌트 행을 잠근 뒤 현재 이용 관계를 조회하여 생성 또는 변경한다.
         - 접근 자격 변경이므로 8장 규약(`Idempotency-Key` 필수, `503 access_sync_pending`)을 따른다.
         - 중단하면 성공 응답 이후 시작된 해당 테넌트·SaaS의 신규 요청이 거부된다(FR-APP-008-01).
-        - 같은 테넌트·서비스에 관계는 하나뿐이다. 동시 활성화 경합은 ETag로 막는다(9장 보안 테스트).
+        - 같은 테넌트·서비스의 중복 관계는 UNIQUE 제약으로 막는다(9장 보안 테스트).
       x-requirements: [FR-APP-002, FR-APP-005, FR-APP-008-01, FR-APP-008-05, FR-APP-008-06, FR-APP-008-07, FR-APP-008-09, SC-03, SC-05, NFR-OPS-002-03]
       x-audit-event: tenant_application.changed
       parameters:
@@ -1807,8 +1746,6 @@ paths:
         - $ref: '#/components/parameters/ApplicationIdPath'
         - $ref: '#/components/parameters/RequestId'
         - $ref: '#/components/parameters/Activity'
-        - $ref: '#/components/parameters/IfMatchOptional'
-        - $ref: '#/components/parameters/IfNoneMatch'
         - $ref: '#/components/parameters/IdempotencyKeyRequired'
       requestBody:
         required: true
@@ -1820,8 +1757,6 @@ paths:
         '200':
           description: 변경 완료(DB 커밋과 Valkey 반영 완료)
           headers:
-            ETag:
-              $ref: '#/components/headers/ETag'
             Idempotency-Replayed:
               $ref: '#/components/headers/IdempotencyReplayed'
           content:
@@ -1830,9 +1765,6 @@ paths:
                 $ref: '#/components/schemas/TenantApplication'
         '201':
           description: 처음 활성화 완료
-          headers:
-            ETag:
-              $ref: '#/components/headers/ETag'
           content:
             application/json:
               schema:
@@ -1845,12 +1777,8 @@ paths:
           $ref: '#/components/responses/TenantForbidden'
         '404':
           $ref: '#/components/responses/NotFound'
-        '412':
-          $ref: '#/components/responses/PreconditionFailed'
         '422':
           $ref: '#/components/responses/ValidationFailed'
-        '428':
-          $ref: '#/components/responses/PreconditionRequired'
         '503':
           $ref: '#/components/responses/SecurityChangeUnavailable'
 
@@ -1905,9 +1833,6 @@ paths:
       responses:
         '200':
           description: 테넌트
-          headers:
-            ETag:
-              $ref: '#/components/headers/ETag'
           content:
             application/json:
               schema:
@@ -1931,7 +1856,6 @@ paths:
         - $ref: '#/components/parameters/TenantIdPath'
         - $ref: '#/components/parameters/RequestId'
         - $ref: '#/components/parameters/Activity'
-        - $ref: '#/components/parameters/IfMatch'
         - $ref: '#/components/parameters/IdempotencyKeyRequired'
       requestBody:
         required: true
@@ -1943,8 +1867,6 @@ paths:
         '200':
           description: 변경 완료(DB 커밋과 Valkey 반영 완료)
           headers:
-            ETag:
-              $ref: '#/components/headers/ETag'
             Idempotency-Replayed:
               $ref: '#/components/headers/IdempotencyReplayed'
           content:
@@ -1959,12 +1881,8 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
-        '412':
-          $ref: '#/components/responses/PreconditionFailed'
         '422':
           $ref: '#/components/responses/ValidationFailed'
-        '428':
-          $ref: '#/components/responses/PreconditionRequired'
         '503':
           $ref: '#/components/responses/SecurityChangeUnavailable'
 
@@ -1982,9 +1900,6 @@ paths:
       responses:
         '200':
           description: OIDC 설정
-          headers:
-            ETag:
-              $ref: '#/components/headers/ETag'
           content:
             application/json:
               schema:
@@ -2007,8 +1922,6 @@ paths:
         - $ref: '#/components/parameters/TenantIdPath'
         - $ref: '#/components/parameters/RequestId'
         - $ref: '#/components/parameters/Activity'
-        - $ref: '#/components/parameters/IfMatchOptional'
-        - $ref: '#/components/parameters/IfNoneMatch'
       requestBody:
         required: true
         content:
@@ -2020,18 +1933,12 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '200':
           description: 변경 완료
-          headers:
-            ETag:
-              $ref: '#/components/headers/ETag'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/OidcConfigurationChangeResult'
         '201':
           description: 생성 완료
-          headers:
-            ETag:
-              $ref: '#/components/headers/ETag'
           content:
             application/json:
               schema:
@@ -2042,12 +1949,8 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
-        '412':
-          $ref: '#/components/responses/PreconditionFailed'
         '422':
           $ref: '#/components/responses/ValidationFailed'
-        '428':
-          $ref: '#/components/responses/PreconditionRequired'
         '503':
           $ref: '#/components/responses/SecurityChangeUnavailable'
 
@@ -2095,8 +1998,6 @@ paths:
         - $ref: '#/components/parameters/ApplicationIdPath'
         - $ref: '#/components/parameters/RequestId'
         - $ref: '#/components/parameters/Activity'
-        - $ref: '#/components/parameters/IfMatchOptional'
-        - $ref: '#/components/parameters/IfNoneMatch'
         - $ref: '#/components/parameters/IdempotencyKeyRequired'
       requestBody:
         required: true
@@ -2108,8 +2009,6 @@ paths:
         '200':
           description: 변경 완료(DB 커밋과 Valkey 반영 완료)
           headers:
-            ETag:
-              $ref: '#/components/headers/ETag'
             Idempotency-Replayed:
               $ref: '#/components/headers/IdempotencyReplayed'
           content:
@@ -2118,9 +2017,6 @@ paths:
                 $ref: '#/components/schemas/TenantApplication'
         '201':
           description: 처음 활성화 완료
-          headers:
-            ETag:
-              $ref: '#/components/headers/ETag'
           content:
             application/json:
               schema:
@@ -2133,12 +2029,8 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
-        '412':
-          $ref: '#/components/responses/PreconditionFailed'
         '422':
           $ref: '#/components/responses/ValidationFailed'
-        '428':
-          $ref: '#/components/responses/PreconditionRequired'
         '503':
           $ref: '#/components/responses/SecurityChangeUnavailable'
 
@@ -2196,9 +2088,6 @@ paths:
       responses:
         '200':
           description: 사용자
-          headers:
-            ETag:
-              $ref: '#/components/headers/ETag'
           content:
             application/json:
               schema:
@@ -2226,7 +2115,6 @@ paths:
         - $ref: '#/components/parameters/UserIdPath'
         - $ref: '#/components/parameters/RequestId'
         - $ref: '#/components/parameters/Activity'
-        - $ref: '#/components/parameters/IfMatch'
         - $ref: '#/components/parameters/IdempotencyKeyRequired'
       requestBody:
         required: true
@@ -2238,8 +2126,6 @@ paths:
         '200':
           description: 변경 완료
           headers:
-            ETag:
-              $ref: '#/components/headers/ETag'
             Idempotency-Replayed:
               $ref: '#/components/headers/IdempotencyReplayed'
           content:
@@ -2256,12 +2142,8 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
-        '412':
-          $ref: '#/components/responses/PreconditionFailed'
         '422':
           $ref: '#/components/responses/ValidationFailed'
-        '428':
-          $ref: '#/components/responses/PreconditionRequired'
         '503':
           $ref: '#/components/responses/SecurityChangeUnavailable'
 
@@ -2325,8 +2207,6 @@ paths:
         '201':
           description: 등록 완료
           headers:
-            ETag:
-              $ref: '#/components/headers/ETag'
             Cache-Control:
               $ref: '#/components/headers/NoStore'
           content:
@@ -2355,9 +2235,6 @@ paths:
       responses:
         '200':
           description: Application
-          headers:
-            ETag:
-              $ref: '#/components/headers/ETag'
           content:
             application/json:
               schema:
@@ -2383,7 +2260,6 @@ paths:
         - $ref: '#/components/parameters/ApplicationIdPath'
         - $ref: '#/components/parameters/RequestId'
         - $ref: '#/components/parameters/Activity'
-        - $ref: '#/components/parameters/IfMatch'
         - $ref: '#/components/parameters/IdempotencyKeyRequired'
       requestBody:
         required: true
@@ -2395,8 +2271,6 @@ paths:
         '200':
           description: 변경 완료
           headers:
-            ETag:
-              $ref: '#/components/headers/ETag'
             Idempotency-Replayed:
               $ref: '#/components/headers/IdempotencyReplayed'
           content:
@@ -2411,12 +2285,8 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
-        '412':
-          $ref: '#/components/responses/PreconditionFailed'
         '422':
           $ref: '#/components/responses/ValidationFailed'
-        '428':
-          $ref: '#/components/responses/PreconditionRequired'
         '503':
           $ref: '#/components/responses/SecurityChangeUnavailable'
 
@@ -3460,9 +3330,6 @@ paths:
       responses:
         '200':
           description: 현재 사용자
-          headers:
-            ETag:
-              $ref: '#/components/headers/ETag'
           content:
             application/json:
               schema:
@@ -3498,21 +3365,14 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '200':
           description: 수정 결과
-          headers:
-            ETag:
-              $ref: '#/components/headers/ETag'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/UserSelf'
         '401':
           $ref: '#/components/responses/SsoUnauthorized'
-        '412':
-          $ref: '#/components/responses/PreconditionFailed'
         '422':
           $ref: '#/components/responses/ValidationFailed'
-        '428':
-          $ref: '#/components/responses/PreconditionRequired'
         '503':
           $ref: '#/components/responses/SecurityChangeUnavailable'
 
@@ -3520,7 +3380,6 @@ paths:
       - $ref: '#/components/parameters/IdempotencyKeyRequired'
       - $ref: '#/components/parameters/RequestId'
       - $ref: '#/components/parameters/Activity'
-      - $ref: '#/components/parameters/IfMatch'
       requestBody:
         required: true
         content:
@@ -3797,8 +3656,6 @@ paths:
               description: '`/api/v1/tenants/{tenant_id}`'
               schema:
                 type: string
-            ETag:
-              $ref: '#/components/headers/ETag'
           content:
             application/json:
               schema:
@@ -3844,9 +3701,6 @@ paths:
       responses:
         '200':
           description: 테넌트
-          headers:
-            ETag:
-              $ref: '#/components/headers/ETag'
           content:
             application/json:
               schema:
@@ -3882,9 +3736,6 @@ paths:
       responses:
         '200':
           description: 수정 결과
-          headers:
-            ETag:
-              $ref: '#/components/headers/ETag'
           content:
             application/json:
               schema:
@@ -3895,17 +3746,12 @@ paths:
           $ref: '#/components/responses/TenantForbidden'
         '404':
           $ref: '#/components/responses/NotFound'
-        '412':
-          $ref: '#/components/responses/PreconditionFailed'
         '422':
           $ref: '#/components/responses/ValidationFailed'
-        '428':
-          $ref: '#/components/responses/PreconditionRequired'
       parameters:
       - $ref: '#/components/parameters/TenantIdPath'
       - $ref: '#/components/parameters/RequestId'
       - $ref: '#/components/parameters/Activity'
-      - $ref: '#/components/parameters/IfMatch'
       requestBody:
         required: true
         content:
@@ -3936,9 +3782,6 @@ paths:
       responses:
         '200':
           description: OIDC 설정
-          headers:
-            ETag:
-              $ref: '#/components/headers/ETag'
           content:
             application/json:
               schema:
@@ -3985,18 +3828,12 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '200':
           description: 변경 완료
-          headers:
-            ETag:
-              $ref: '#/components/headers/ETag'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/OidcConfigurationChangeResult'
         '201':
           description: 생성 완료
-          headers:
-            ETag:
-              $ref: '#/components/headers/ETag'
           content:
             application/json:
               schema:
@@ -4007,12 +3844,8 @@ paths:
           $ref: '#/components/responses/TenantForbidden'
         '404':
           $ref: '#/components/responses/NotFound'
-        '412':
-          $ref: '#/components/responses/PreconditionFailed'
         '422':
           $ref: '#/components/responses/ValidationFailed'
-        '428':
-          $ref: '#/components/responses/PreconditionRequired'
         '503':
           $ref: '#/components/responses/SecurityChangeUnavailable'
 
@@ -4021,8 +3854,6 @@ paths:
       - $ref: '#/components/parameters/TenantIdPath'
       - $ref: '#/components/parameters/RequestId'
       - $ref: '#/components/parameters/Activity'
-      - $ref: '#/components/parameters/IfMatchOptional'
-      - $ref: '#/components/parameters/IfNoneMatch'
       requestBody:
         required: true
         content:
@@ -4123,8 +3954,6 @@ paths:
         '201':
           description: 멤버 추가 완료(DB 커밋과 Valkey 반영 완료)
           headers:
-            ETag:
-              $ref: '#/components/headers/ETag'
             Idempotency-Replayed:
               $ref: '#/components/headers/IdempotencyReplayed'
           content:
@@ -4179,9 +4008,6 @@ paths:
       responses:
         '200':
           description: 멤버
-          headers:
-            ETag:
-              $ref: '#/components/headers/ETag'
           content:
             application/json:
               schema:
@@ -4228,8 +4054,6 @@ paths:
         '200':
           description: 변경 완료(DB 커밋과 Valkey 반영 완료)
           headers:
-            ETag:
-              $ref: '#/components/headers/ETag'
             Idempotency-Replayed:
               $ref: '#/components/headers/IdempotencyReplayed'
           content:
@@ -4246,12 +4070,8 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
-        '412':
-          $ref: '#/components/responses/PreconditionFailed'
         '422':
           $ref: '#/components/responses/ValidationFailed'
-        '428':
-          $ref: '#/components/responses/PreconditionRequired'
         '503':
           $ref: '#/components/responses/SecurityChangeUnavailable'
       parameters:
@@ -4259,7 +4079,6 @@ paths:
       - $ref: '#/components/parameters/MembershipIdPath'
       - $ref: '#/components/parameters/RequestId'
       - $ref: '#/components/parameters/Activity'
-      - $ref: '#/components/parameters/IfMatch'
       - $ref: '#/components/parameters/IdempotencyKeyRequired'
       requestBody:
         required: true
@@ -4311,10 +4130,6 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
-        '412':
-          $ref: '#/components/responses/PreconditionFailed'
-        '428':
-          $ref: '#/components/responses/PreconditionRequired'
         '503':
           $ref: '#/components/responses/SecurityChangeUnavailable'
       parameters:
@@ -4322,7 +4137,6 @@ paths:
       - $ref: '#/components/parameters/MembershipIdPath'
       - $ref: '#/components/parameters/RequestId'
       - $ref: '#/components/parameters/Activity'
-      - $ref: '#/components/parameters/IfMatch'
       - $ref: '#/components/parameters/IdempotencyKeyRequired'
 
   /sso/api/v1/tenants/{tenant_id}/applications:
@@ -4401,8 +4215,6 @@ paths:
         '200':
           description: 변경 완료(DB 커밋과 Valkey 반영 완료)
           headers:
-            ETag:
-              $ref: '#/components/headers/ETag'
             Idempotency-Replayed:
               $ref: '#/components/headers/IdempotencyReplayed'
           content:
@@ -4411,9 +4223,6 @@ paths:
                 $ref: '#/components/schemas/TenantApplication'
         '201':
           description: 처음 활성화 완료
-          headers:
-            ETag:
-              $ref: '#/components/headers/ETag'
           content:
             application/json:
               schema:
@@ -4426,12 +4235,8 @@ paths:
           $ref: '#/components/responses/TenantForbidden'
         '404':
           $ref: '#/components/responses/NotFound'
-        '412':
-          $ref: '#/components/responses/PreconditionFailed'
         '422':
           $ref: '#/components/responses/ValidationFailed'
-        '428':
-          $ref: '#/components/responses/PreconditionRequired'
         '503':
           $ref: '#/components/responses/SecurityChangeUnavailable'
       parameters:
@@ -4439,8 +4244,6 @@ paths:
       - $ref: '#/components/parameters/ApplicationIdPath'
       - $ref: '#/components/parameters/RequestId'
       - $ref: '#/components/parameters/Activity'
-      - $ref: '#/components/parameters/IfMatchOptional'
-      - $ref: '#/components/parameters/IfNoneMatch'
       - $ref: '#/components/parameters/IdempotencyKeyRequired'
       requestBody:
         required: true
@@ -4524,9 +4327,6 @@ paths:
       responses:
         '200':
           description: 테넌트
-          headers:
-            ETag:
-              $ref: '#/components/headers/ETag'
           content:
             application/json:
               schema:
@@ -4570,8 +4370,6 @@ paths:
         '200':
           description: 변경 완료(DB 커밋과 Valkey 반영 완료)
           headers:
-            ETag:
-              $ref: '#/components/headers/ETag'
             Idempotency-Replayed:
               $ref: '#/components/headers/IdempotencyReplayed'
           content:
@@ -4586,19 +4384,14 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
-        '412':
-          $ref: '#/components/responses/PreconditionFailed'
         '422':
           $ref: '#/components/responses/ValidationFailed'
-        '428':
-          $ref: '#/components/responses/PreconditionRequired'
         '503':
           $ref: '#/components/responses/SecurityChangeUnavailable'
       parameters:
       - $ref: '#/components/parameters/TenantIdPath'
       - $ref: '#/components/parameters/RequestId'
       - $ref: '#/components/parameters/Activity'
-      - $ref: '#/components/parameters/IfMatch'
       - $ref: '#/components/parameters/IdempotencyKeyRequired'
       requestBody:
         required: true
@@ -4629,9 +4422,6 @@ paths:
       responses:
         '200':
           description: OIDC 설정
-          headers:
-            ETag:
-              $ref: '#/components/headers/ETag'
           content:
             application/json:
               schema:
@@ -4673,18 +4463,12 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '200':
           description: 변경 완료
-          headers:
-            ETag:
-              $ref: '#/components/headers/ETag'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/OidcConfigurationChangeResult'
         '201':
           description: 생성 완료
-          headers:
-            ETag:
-              $ref: '#/components/headers/ETag'
           content:
             application/json:
               schema:
@@ -4695,12 +4479,8 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
-        '412':
-          $ref: '#/components/responses/PreconditionFailed'
         '422':
           $ref: '#/components/responses/ValidationFailed'
-        '428':
-          $ref: '#/components/responses/PreconditionRequired'
         '503':
           $ref: '#/components/responses/SecurityChangeUnavailable'
 
@@ -4709,8 +4489,6 @@ paths:
       - $ref: '#/components/parameters/TenantIdPath'
       - $ref: '#/components/parameters/RequestId'
       - $ref: '#/components/parameters/Activity'
-      - $ref: '#/components/parameters/IfMatchOptional'
-      - $ref: '#/components/parameters/IfNoneMatch'
       requestBody:
         required: true
         content:
@@ -4790,8 +4568,6 @@ paths:
         '200':
           description: 변경 완료(DB 커밋과 Valkey 반영 완료)
           headers:
-            ETag:
-              $ref: '#/components/headers/ETag'
             Idempotency-Replayed:
               $ref: '#/components/headers/IdempotencyReplayed'
           content:
@@ -4800,9 +4576,6 @@ paths:
                 $ref: '#/components/schemas/TenantApplication'
         '201':
           description: 처음 활성화 완료
-          headers:
-            ETag:
-              $ref: '#/components/headers/ETag'
           content:
             application/json:
               schema:
@@ -4815,12 +4588,8 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
-        '412':
-          $ref: '#/components/responses/PreconditionFailed'
         '422':
           $ref: '#/components/responses/ValidationFailed'
-        '428':
-          $ref: '#/components/responses/PreconditionRequired'
         '503':
           $ref: '#/components/responses/SecurityChangeUnavailable'
       parameters:
@@ -4828,8 +4597,6 @@ paths:
       - $ref: '#/components/parameters/ApplicationIdPath'
       - $ref: '#/components/parameters/RequestId'
       - $ref: '#/components/parameters/Activity'
-      - $ref: '#/components/parameters/IfMatchOptional'
-      - $ref: '#/components/parameters/IfNoneMatch'
       - $ref: '#/components/parameters/IdempotencyKeyRequired'
       requestBody:
         required: true
@@ -4913,9 +4680,6 @@ paths:
       responses:
         '200':
           description: 사용자
-          headers:
-            ETag:
-              $ref: '#/components/headers/ETag'
           content:
             application/json:
               schema:
@@ -4956,8 +4720,6 @@ paths:
         '200':
           description: 변경 완료
           headers:
-            ETag:
-              $ref: '#/components/headers/ETag'
             Idempotency-Replayed:
               $ref: '#/components/headers/IdempotencyReplayed'
           content:
@@ -4974,19 +4736,14 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
-        '412':
-          $ref: '#/components/responses/PreconditionFailed'
         '422':
           $ref: '#/components/responses/ValidationFailed'
-        '428':
-          $ref: '#/components/responses/PreconditionRequired'
         '503':
           $ref: '#/components/responses/SecurityChangeUnavailable'
       parameters:
       - $ref: '#/components/parameters/UserIdPath'
       - $ref: '#/components/parameters/RequestId'
       - $ref: '#/components/parameters/Activity'
-      - $ref: '#/components/parameters/IfMatch'
       - $ref: '#/components/parameters/IdempotencyKeyRequired'
       requestBody:
         required: true
@@ -5072,8 +4829,6 @@ paths:
         '201':
           description: 등록 완료
           headers:
-            ETag:
-              $ref: '#/components/headers/ETag'
             Cache-Control:
               $ref: '#/components/headers/NoStore'
           content:
@@ -5120,9 +4875,6 @@ paths:
       responses:
         '200':
           description: Application
-          headers:
-            ETag:
-              $ref: '#/components/headers/ETag'
           content:
             application/json:
               schema:
@@ -5163,8 +4915,6 @@ paths:
         '200':
           description: 변경 완료
           headers:
-            ETag:
-              $ref: '#/components/headers/ETag'
             Idempotency-Replayed:
               $ref: '#/components/headers/IdempotencyReplayed'
           content:
@@ -5179,19 +4929,14 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
-        '412':
-          $ref: '#/components/responses/PreconditionFailed'
         '422':
           $ref: '#/components/responses/ValidationFailed'
-        '428':
-          $ref: '#/components/responses/PreconditionRequired'
         '503':
           $ref: '#/components/responses/SecurityChangeUnavailable'
       parameters:
       - $ref: '#/components/parameters/ApplicationIdPath'
       - $ref: '#/components/parameters/RequestId'
       - $ref: '#/components/parameters/Activity'
-      - $ref: '#/components/parameters/IfMatch'
       - $ref: '#/components/parameters/IdempotencyKeyRequired'
       requestBody:
         required: true
@@ -5306,26 +5051,6 @@ components:
       schema:
         type: string
         enum: [user]
-    IfMatch:
-      name: If-Match
-      in: header
-      required: true
-      description: 직전 응답의 `ETag`. 누락 시 `428`, 불일치 시 `412`.
-      schema:
-        type: string
-    IfMatchOptional:
-      name: If-Match
-      in: header
-      description: 기존 리소스를 바꿀 때 필수.
-      schema:
-        type: string
-    IfNoneMatch:
-      name: If-None-Match
-      in: header
-      description: 새로 만들 때 `*`.
-      schema:
-        type: string
-        enum: ['*']
     IdempotencyKeyRequired:
       name: Idempotency-Key
       in: header
@@ -5401,11 +5126,6 @@ components:
       description: 요청 추적 ID
       schema:
         type: string
-    ETag:
-      description: 리소스 버전. 변경 요청의 `If-Match`에 쓴다.
-      schema:
-        type: string
-        examples: ['"7"']
     IdempotencyReplayed:
       description: 같은 `Idempotency-Key`의 저장된 결과를 재생했으면 `true`.
       schema:
@@ -5679,30 +5399,6 @@ components:
                 code: identity_already_linked
                 request_id: req_01JBX4T9Q2
 
-    PreconditionFailed:
-      description: '`If-Match` 불일치. 최신 리소스를 다시 조회한다.'
-      content:
-        application/problem+json:
-          schema:
-            $ref: '#/components/schemas/Problem'
-          example:
-            type: urn:passport:problem:precondition_failed
-            title: The resource has been modified
-            status: 412
-            code: precondition_failed
-            request_id: req_01JBX4T9Q2
-    PreconditionRequired:
-      description: '`If-Match` 누락'
-      content:
-        application/problem+json:
-          schema:
-            $ref: '#/components/schemas/Problem'
-          example:
-            type: urn:passport:problem:precondition_required
-            title: If-Match header is required
-            status: 428
-            code: precondition_required
-            request_id: req_01JBX4T9Q2
     ValidationFailed:
       description: 입력 검증 실패(`validation_failed`, `idempotency_key_reused`)
       content:
@@ -6075,10 +5771,8 @@ components:
       - identity_already_linked
       - last_tenant_admin
       - local_credential_not_set
-      - precondition_failed
       - validation_failed
       - idempotency_key_reused
-      - precondition_required
       - too_many_requests
       - access_sync_pending
       - security_record_pending
@@ -6876,7 +6570,6 @@ components:
       - joined_at
       - created_at
       - updated_at
-      - etag
       properties:
         view:
           type: string
@@ -6916,9 +6609,6 @@ components:
           $ref: '#/components/schemas/Timestamp'
         updated_at:
           $ref: '#/components/schemas/Timestamp'
-        etag:
-          type: string
-          description: 목록에서 바로 변경할 때 `If-Match`에 쓴다
       examples:
       - view: admin
         membership_id: 0193a3c5-4444-7aaa-8bbb-0c0d0e0f1011
@@ -6932,7 +6622,6 @@ components:
         joined_at: '2026-10-02T00:00:00Z'
         created_at: '2026-10-01T00:00:00Z'
         updated_at: '2026-10-02T00:00:00Z'
-        etag: '"3"'
 
     MemberPeerView:
       type: object
@@ -6983,7 +6672,7 @@ components:
           enum: [active, inactive]
     TenantApplication:
       type: object
-      required: [tenant_id, application_id, code, name, status, updated_at, etag]
+      required: [tenant_id, application_id, code, name, status, updated_at]
       properties:
         tenant_id:
           $ref: '#/components/schemas/Uuid'
@@ -6998,9 +6687,6 @@ components:
         updated_at:
           type: [string, 'null']
           format: date-time
-        etag:
-          type: [string, 'null']
-          description: '`not_enabled`면 `null`(처음 활성화는 `If-None-Match: *`)'
       examples:
         - tenant_id: 0193a3c1-7c2e-7d11-9a40-5b1e2f3a4b5c
           application_id: 0193a3a0-9999-7aaa-8bbb-0c0d0e0f1011
@@ -7008,7 +6694,6 @@ components:
           name: Papyrus
           status: active
           updated_at: '2026-10-03T00:00:00Z'
-          etag: '"2"'
     TenantApplicationPage:
       type: object
       required: [items, next_cursor]

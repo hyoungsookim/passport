@@ -20,12 +20,11 @@ Phase 2의 ORM(`passport/db/models/`)과 초기 Alembic 마이그레이션은 �
 | 기본 키 | 기본 `id uuid`, `users`는 `user_id uuid`. 값은 애플리케이션에서 `uuid.uuid7()`로 만든다. 시간순이라 인덱스 지역성이 좋고 계약의 ID 예시 형식과 같다. 1:1 확장 테이블은 부모 키를 PK로 쓴다 |
 | 시각 | `timestamptz`, UTC. `created_at`·`updated_at`의 기본값은 `now()` |
 | 열거 값 | Python `enum.IntEnum`의 명시적 정수 키(`.value`)를 PostgreSQL `smallint`에 저장한다. CHECK 적용 범위는 1.1절을 따른다 |
-| ETag | 변경 가능 리소스는 `version integer NOT NULL DEFAULT 1`. SQLAlchemy `version_id_col`로 매핑해 `UPDATE … WHERE version = :expected`가 되게 한다. ETag는 `"{version}"` |
-| 접근 자격 버전 | `access_version bigint NOT NULL DEFAULT 1`. `tenants`, `tenant_memberships`, `tenant_applications`에만 둔다(FR-APP-008-05). `version`과 별개다 |
+| 접근 자격 버전 | `access_version bigint NOT NULL DEFAULT 1`. `tenants`, `tenant_memberships`, `tenant_applications`에만 둔다(FR-APP-008-05) |
 | 이메일 | 소문자 정규화 값만 저장한다(계약 `Email`). `users.user_email`은 애플리케이션에서 정규화·검증한다 |
 | FK 삭제 동작 | 기본 `RESTRICT`. `users`를 참조하는 모든 FK와 그 자손으로 내려가는 FK는 `ON DELETE CASCADE`이며 표에 적는다. 공유 부모인 테넌트·서비스·OIDC 설정은 삭제하지 않는다. `audit_logs`에는 FK를 두지 않는다 |
 | CHECK 제외 테이블 | `users`, `user_securities`, `tenants`에는 열거값·형식·상태 조합을 포함한 모든 DB CHECK를 두지 않는다. 해당 값의 검증은 애플리케이션에서 수행한다 |
-| 표 읽는 법 | "NULL" 열이 `예`인 열만 NULL을 허용한다. "공통 열"은 `created_at`, `updated_at`, `version` 세 개다 |
+| 표 읽는 법 | "NULL" 열이 `예`인 열만 NULL을 허용한다. "공통 열"은 `created_at`, `updated_at` 두 개다 |
 
 ### 1.1 Python Enum과 정수 키
 
@@ -190,7 +189,6 @@ erDiagram
 | `updated_at` | timestamptz | | | 수정 시각 |
 | `external_id` | varchar(50) | 예 | | 외부 서비스 연결용 식별값 |
 | `external_source` | varchar(50) | 예 | | 외부 서비스 연결용 식별값이 보관된 곳 |
-| 공통 열 | | | | `version`은 프로필·계정 상태 변경이 공유하는 ETag이며 `getMe`·`updateMe`에도 사용한다 |
 
 - UNIQUE `uq_users_user_email` (`user_email`). Local 로그인 식별자이고(FR-AUTH-001), 같은 이메일로 계정을 새로 만들지 않는다(D-08). 외부 신원 연결 판단에는 쓰지 않는다. 탈퇴 시 행이 삭제되므로 같은 이메일로 다시 가입할 수 있으며 새 사용자 ID를 발급한다.
 - 개인정보 조회·변경 DTO는 인증 비밀값을 제외하고 역할·테넌트별 허용 필드만 명시적으로 매핑한다(FR-USER-007). 삭제된 사용자는 일반·관리자 조회에서 찾을 수 없으며 탈퇴자 개인정보 조회 경로도 제공하지 않는다.
@@ -277,7 +275,7 @@ erDiagram
 | `name` | varchar(100) | | | |
 | `tenant_status` | smallint | | `1` | `TenantStatus`. `active`, `suspended`, `deactivated` |
 | `access_version` | bigint | | `1` | 상태 변경마다 1 증가 |
-| 공통 열 | | | | `version`은 테넌트 API의 ETag |
+| 공통 열 | | | | |
 
 #### `tenant_oidc_configurations`
 
@@ -572,7 +570,7 @@ erDiagram
 
 **목적:** 동일한 클라이언트 요청의 재시도를 식별하고 중복 변경을 방지하기 위한 처리 결과를 보관한다.
 
-**역할:** 요청자·멱등 키별로 요청 해시와 응답·ETag를 기록하여 요청의 동일성을 검증하고 처음 처리 결과를 재생한다. 외부 기록·Valkey 반영의 부분 실패 후에도 DB 상태와 버전을 중복 변경하지 않는 재시도의 기준이 된다.
+**역할:** 요청자·멱등 키별로 요청 해시와 응답을 기록하여 요청의 동일성을 검증하고 처음 처리 결과를 재생한다. 외부 기록·Valkey 반영의 부분 실패 후에도 DB 상태와 접근 자격 버전을 중복 변경하지 않는 재시도의 기준이 된다.
 
 | 컬럼 | 형식 | NULL | 기본값 | 설명 |
 | --- | --- | --- | --- | --- |
@@ -584,7 +582,6 @@ erDiagram
 | `request_hash` | bytea | | | 메서드·경로·본문의 SHA-256. 다르면 `422 idempotency_key_reused` |
 | `response_status` | smallint | 예 | | 처음 결과. 키를 먼저 삽입하고 같은 트랜잭션 끝에 채우므로 커밋된 행에는 항상 값이 있다 |
 | `response_body` | jsonb | 예 | | `204`면 NULL |
-| `response_etag` | varchar(64) | 예 | | |
 | `expires_at` | timestamptz | | | **[제안]** 생성 후 24시간 |
 | `created_at` | timestamptz | | `now()` | |
 
@@ -737,7 +734,7 @@ erDiagram
 
 ## 7. 트랜잭션 경계와 동시성
 
-트랜잭션은 `apps`의 서비스가 유스케이스 단위로 연다(REQUIREMENTS Phase 2). ETag가 있는 변경은 `If-Match` 값을 `version`과 비교하고, `version_id_col`이 동시 변경을 한 번 더 막는다. 갱신 행이 0이면 `412`다.
+트랜잭션은 `apps`의 서비스가 유스케이스 단위로 연다(REQUIREMENTS Phase 2). 일반 수정은 나중에 커밋된 값을 반영한다. 보안 상태·접근 자격 변경과 마지막 관리자 보호 등은 관련 행을 잠그고 현재 상태를 다시 확인하여 처리하며, 중복 생성은 UNIQUE 제약으로 막는다.
 
 | 유스케이스 | 한 트랜잭션 안에서 | 동시성·중복 방지 |
 | --- | --- | --- |
@@ -753,7 +750,7 @@ erDiagram
 | 테넌트 생성 | `tenants`, 생성자 `admin` 멤버십 삽입 | `code` UNIQUE → `409 already_exists` |
 | 멤버 추가 | 기존 사용자 확인, `active` 멤버십·`joined_at`·초기 버전 `1` 삽입, 멱등 결과·버전 동기화 기록 | 사용자 FK와 부분 UNIQUE로 탈퇴·동시 추가와의 경합을 막는다. 커밋 후 Valkey 반영을 마쳐야 201이다. 같은 멱등 키 재시도는 원 결과를 반환한다 |
 | 접근 자격 변경 | 8장 | 마지막 관리자 검사는 그 테넌트의 `active` `admin` 멤버십을 `FOR UPDATE`로 잠근 뒤 센다 |
-| OIDC 설정 변경 | 설정 갱신, 신뢰 변경이면 `trust_version` + 1과 로그인 종료 | ETag |
+| OIDC 설정 변경 | 설정 갱신, 신뢰 변경이면 `trust_version` + 1과 로그인 종료 | 테넌트 행을 잠근 뒤 설정을 조회·변경하여 최초 생성과 후속 변경을 직렬화한다 |
 | 탈퇴 | 9.2절. `withdrawal_receipts`도 원 멱등 키와 함께 삽입 | 접근 자격 변경 규약. 완료 재시도는 전용 확인 키로만 원 요청에 연결 |
 
 ## 8. 접근 자격 버전과 Valkey
@@ -761,7 +758,7 @@ erDiagram
 원본은 DB의 `access_version`이고, Valkey는 Passport 검증 경로의 버전 캐시다(FR-APP-008-07). 9.4절 대상 작업은 아래 처리와 함께 외부 보안 기록의 영속화·완료 확인도 적용한다.
 
 1. 변경 API는 한 트랜잭션에서 다음을 한다. 9.4절 대상이면 상태 변경 전에 외부 변경 의도의 영속화를 확인한다.
-   - `idempotency_keys`에 먼저 삽입한다. 같은 키의 동시 요청은 UNIQUE 인덱스에서 기다렸다가 처음 결과를 재생한다. 멱등 키 확인은 `If-Match` 평가보다 먼저다(계약 8장).
+   - `idempotency_keys`에 먼저 삽입한다. 같은 키의 동시 요청은 UNIQUE 인덱스에서 기다렸다가 처음 결과를 재생한다(계약 8장).
    - 상태를 바꾸고 `access_version`을 1 올린다(FR-APP-008-06). 멤버 추가는 초기 버전 `1`을 기록한다. 탈퇴로 삭제할 멤버십은 삭제 직전 버전 + 1을 최종 무효화 버전으로 확보하고 실제 행은 삭제한다.
    - `access_version_syncs`에 `version = GREATEST(기존, 새 값)`로 upsert한다.
    - 돌려줄 응답을 `idempotency_keys`에 기록한다.
