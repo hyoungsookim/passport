@@ -134,7 +134,7 @@ Access Token은 저장하지 않는다. 철회는 `sid`(= `logins.id`)의 상태
 erDiagram
     USERS ||--|| USER_SECURITIES : security
     USERS ||--o{ IDENTITIES : external_identity
-    USERS ||--o{ EMAIL_VERIFICATION_TOKENS : verifies
+    USERS ||--o| EMAIL_VERIFICATION_TOKENS : verifies
     USERS ||--o{ TENANT_MEMBERSHIPS : belongs_to
     TENANTS ||--o{ TENANT_MEMBERSHIPS : has
     TENANTS ||--o| TENANT_OIDC_CONFIGURATIONS : configures
@@ -246,21 +246,21 @@ erDiagram
 
 #### `email_verification_tokens`
 
-**목적:** Local 가입자의 이메일 소유 확인에 사용하는 일회용 토큰의 발급·소비 상태를 관리한다.
+**목적:** Local 가입자의 이메일 소유 확인에 필요한 현재 일회용 토큰을 사용자당 최대 한 행으로 관리한다.
 
-**역할:** 토큰 해시와 만료·소비 시각으로 확인 요청의 유효성을 검증하는 근거를 제공한다. 이메일 확인 완료와 가입 계정 활성화를 같은 트랜잭션에서 처리할 수 있도록 사용자에 연결한다.
+**역할:** 토큰 해시와 만료 시각으로 확인 요청의 유효성을 검증한다. 재발송 시 기존 토큰을 교체하고, 확인 성공 시 토큰 행 삭제와 이메일 확인 시각 기록·계정 활성화를 같은 트랜잭션에서 처리한다. 발급 이력은 이 테이블에 보관하지 않는다.
 
 | 컬럼 | 형식 | NULL | 기본값 | 설명 |
 | --- | --- | --- | --- | --- |
-| `id` | uuid | | UUIDv7 | |
-| `user_id` | uuid | | | FK `users` `CASCADE` |
+| `user_id` | uuid | | | PK, FK `users` `CASCADE`. 사용자당 최대 한 행(`1:0..1`) |
 | `token_hash` | bytea | | | UNIQUE |
 | `expires_at` | timestamptz | | | **[제안]** 발급 후 24시간 |
-| `consumed_at` | timestamptz | 예 | | |
-| `created_at` | timestamptz | | `now()` | |
+| `created_at` | timestamptz | | `now()` | 현재 토큰 발급 시각. 재발송 시 갱신 |
 
-- 인덱스 `user_id`
-- **[제안]** 재발송하면 그 사용자의 미사용 토큰을 지우고 새로 발급한다.
+- `user_id` PK로 사용자당 최대 한 행을 보장한다. 별도 `id`·`consumed_at`·`user_id` 보조 인덱스는 두지 않는다. OIDC 전용 사용자와 이메일 확인을 마친 사용자에게는 토큰 행이 없다.
+- 재발송은 `users` 행을 `FOR UPDATE`로 잠그고 미확인 Local 가입 계정(`user_status = 1`, `email_verified_at IS NULL`)인지 검사한 뒤 `user_id` 기준 UPSERT로 `token_hash`, `expires_at`, `created_at`을 교체한다. 기존 토큰은 즉시 무효이며, 확인 대상이 아니면 발급하지 않고 기존처럼 202를 반환한다.
+- 확인은 해시로 `user_id`를 찾은 뒤 같은 `users` 행을 `FOR UPDATE`로 잠그고 계정 상태와 이메일 미확인을 다시 검사한다. `DELETE … WHERE user_id = :user_id AND token_hash = :token_hash AND expires_at > now() RETURNING user_id`로 현재 토큰만 원자적으로 소비한다. 삭제 행이 없거나 확인 대상이 아니면 `400 invalid_token_value`이며 계정을 활성화하지 않는다.
+- 토큰 삭제와 `users.email_verified_at` 기록·`users.user_status = 2`를 같은 트랜잭션에서 커밋한다. 재발송·동시 확인은 사용자 행 잠금으로 직렬화하며, 확인이 먼저 완료되면 이후 재발송은 토큰을 생성하지 않는다. 실패 시 토큰 삭제와 사용자 변경을 함께 롤백한다.
 
 ### 4.2 테넌트
 
@@ -497,7 +497,7 @@ erDiagram
 
 ### 4.5 일회성 값
 
-모두 해시로 찾고, 소비는 `UPDATE … SET consumed_at = now() WHERE … AND consumed_at IS NULL AND expires_at > now() RETURNING …` 한 문장으로 한다.
+이 절의 OIDC 트랜잭션·연결 티켓·SSO 코드는 해시로 찾고, 소비는 `UPDATE … SET consumed_at = now() WHERE … AND consumed_at IS NULL AND expires_at > now() RETURNING …` 한 문장으로 한다. 이메일 확인 토큰은 4.1절에 따라 확인 성공 시 행을 삭제한다.
 
 #### `oidc_login_transactions`
 
@@ -742,7 +742,8 @@ erDiagram
 | 유스케이스 | 한 트랜잭션 안에서 | 동시성·중복 방지 |
 | --- | --- | --- |
 | Local 가입 | `users`, 비밀번호 해시·알고리즘·변경 시각을 설정한 `user_securities`, `email_verification_tokens` 삽입 | 이메일 UNIQUE 위반이면 롤백하고 안내 메일만 보낸다(응답은 항상 202) |
-| 이메일 확인 | 토큰 소비, `email_verified_at`, `users.user_status = active` | 원자적 소비 |
+| 이메일 확인 메일 재발송 | 미확인 Local 가입 계정의 `user_id` 기준 토큰 UPSERT. 해시·만료·발급 시각 교체 | `users` 행을 `FOR UPDATE`로 잠그고 확인 처리와 직렬화한다. 이전 토큰은 무효이며 확인 완료 계정에는 발급하지 않는다 |
+| 이메일 확인 | 현재 토큰 행 삭제, `email_verified_at` 기록, `users.user_status = active` | `users` 행 잠금 후 계정·토큰 재검증과 조건부 `DELETE … RETURNING`으로 한 번만 소비한다. 사용자 변경 실패 시 삭제도 롤백한다 |
 | Local 로그인·비밀번호 재인증 | `user_securities` 잠금·자격 증명 확인 및 실패/성공 통계 갱신. 새 로그인이면 `logins`, `refresh_token_families`, `refresh_tokens` 삽입, 포털이면 `bff_sessions`도 | 보안 행 `FOR UPDATE`로 판정·갱신을 직렬화한다. 실패 통계는 실패 응답 전에 커밋하며 새 로그인은 새 세션 ID를 발급한다 |
 | 토큰 발급·갱신 | 계열 잠금, 현재 접근 자격 확인, 토큰 회전 | `SELECT … FROM refresh_token_families WHERE id = :id FOR UPDATE`로 같은 계열을 직렬화한다. 포털 BFF는 잠금 안에서 최신 저장 토큰을 읽고, 회전과 `bff_sessions`의 토큰 교체를 같은 트랜잭션에서 커밋한다. 회전된 토큰이 제출되면 사용자의 모든 로그인을 끝내고 커밋한 뒤 401이다. 503이나 조건 미충족이면 롤백해 회전하지 않는다 |
 | 로그아웃, 비밀번호 변경, 계정 차단 | `logins` 종료, `bff_sessions` 삭제. 비밀번호 변경이면 `user_securities`의 비밀번호 해시·알고리즘·변경 시각·변경 필요 여부·실패/잠금 상태도 갱신 | `WHERE ended_at IS NULL`. 비밀번호 변경은 보안 행을 잠그고 로그인·재인증과 직렬화한다 |
@@ -850,7 +851,7 @@ erDiagram
 | 요구사항 | 모델 |
 | --- | --- |
 | FR-USER-001~004, 002-01, 002-02 | `users` |
-| FR-USER-003, D-04 | `users.user_status`, `email_verification_tokens` |
+| FR-USER-003, D-04 | `users.user_status`, `email_verification_tokens.user_id` PK/FK(`1:0..1`), 재발송 시 교체·확인 시 원자적 삭제 |
 | FR-USER-005, 005-01, 005-02 | 사용자 FK의 `CASCADE`, `audit_logs`, `withdrawal_receipts`, 9.2절 |
 | FR-USER-006, 007, FR-OIDC-004, 005, D-08 | `users`의 전역 ID·프로필, `user_securities`의 Local 인증 정보, 인증 비밀값을 제외하는 DTO, `identities` UNIQUE(`issuer`, `subject`), `identity_link_tickets` |
 | FR-AUTH-001, 005~007, NFR-SEC-005 | `users.user_status`, `user_securities`의 비밀번호·실패/잠금 상태 |
@@ -884,6 +885,7 @@ erDiagram
    - CHECK·부분 UNIQUE마다 위반 삽입이 실패하는 테스트를 둔다.
    - 애플리케이션에서 Local 비밀번호 해시·알고리즘·변경 시각의 동시 설정·NULL과 불완전한 조합의 거부를 검증한다. 비밀번호 변경 후 전체 로그인 종료 및 탈퇴 시 계정·자손의 물리 삭제도 검증한다.
    - 이메일·표시 이름 NOT NULL, 이름·성 각각 50자 제한, 탈퇴 후 사용자 및 모든 FK 자손 부재, 공유 부모·감사로그 유지, 같은 이메일 재가입 시 새 사용자 ID 발급을 검증한다.
+   - 이메일 확인 토큰의 사용자당 최대 한 행, 재발송 후 이전 토큰 거부, 동시 재발송·확인의 직렬화, 중복 확인 거부, 계정 활성화 실패 시 토큰 삭제 롤백, 확인 완료 후 토큰 미생성을 검증한다.
    - 삭제된 멤버십의 최종 무효화 버전 반영, 사용자 행 없이 탈퇴 완료 확인 재시도, 사용자 FK 없는 운영 기록의 개인정보 비포함, 백업 복원 시 사용자·자손 재삭제를 검증한다.
    - 계정별 보안 행 1:1·연쇄 삭제, 알고리즘 키/PHC 일치, 실패 카운터의 동시 갱신·실패 응답 후 보존, 잠금 만료·성공 초기화, 새 Local/OIDC 로그인에서만 마지막 로그인 시각 갱신을 검증한다.
    - Enum의 정수 키·기본값·적용 대상의 상태 CHECK·부분 인덱스가 1.1절과 같은지, ORM에서 Enum으로 왕복 변환되는지 검증한다. 알 수 없는 키는 애플리케이션에서 거부하고 API에는 문자열 명칭으로 반환되는지 확인한다.

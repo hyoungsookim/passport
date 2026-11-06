@@ -354,6 +354,8 @@ info:
     2. 사용자가 메일의 링크를 열면 포털이 `POST /sso/api/v1/auth/email-verifications/confirm`을 호출한다.
     3. 확인 전 로그인은 비밀번호 검증 후 `403 email_verification_required`이다.
 
+    확인 토큰은 사용자당 최대 하나만 유지한다. 재발송 시 이전 링크가 무효화되며, 확인 성공 시 토큰 삭제·이메일 확인 시각 기록·계정 활성화를 같은 트랜잭션에서 처리한다.
+
     **F-02 Local 로그인과 테넌트 선택 (SC-01, SC-04)**
     1. `POST /sso/auth/local/login`: SSO가 서버에서 기본·Refresh Token을 받아 보관하고, 브라우저에는 세션 쿠키와 안전한 로그인 상태만 반환한다.
     2. `GET /sso/api/v1/users/me/tenants`: 테넌트별 `access.status`로 선택 화면을 그린다.
@@ -628,6 +630,7 @@ paths:
       summary: 이메일 소유 확인 완료
       description: |
         메일의 확인 토큰을 제출한다. 성공하면 계정이 `active`가 된다. 토큰은 1회용이며 **[제안]** 24시간 유효하다.
+        현재 토큰 행 삭제·`email_verified_at` 기록·계정 활성화를 같은 트랜잭션에서 처리한다. 교체·만료·이미 사용된 토큰은 `400 invalid_token_value`다.
         확인 수단(링크 토큰)은 SC-01의 "인증 링크나 코드" 중 링크 방식이다.
       security: []
       x-requirements: [FR-USER-003, D-04]
@@ -655,7 +658,10 @@ paths:
       operationId: resendEmailVerification
       tags: [Auth]
       summary: 이메일 확인 메일 재발송
-      description: 계정 존재·확인 여부와 관계없이 항상 `202`를 반환한다(계정 열거 방지). 이전 확인 토큰은 무효화된다.
+      description: |
+        계정 존재·확인 여부와 관계없이 항상 `202`를 반환한다(계정 열거 방지).
+        미확인 Local 가입 계정에만 발급하며, 사용자당 최대 한 행을 유지하도록 기존 토큰의 해시·만료·발급 시각을 교체한다. 이전 확인 토큰은 즉시 무효화된다.
+        확인 처리와 재발송을 직렬화하여 확인 완료 후에는 새 토큰을 생성하지 않는다.
       security: []
       x-requirements: [FR-USER-003, FR-AUTH-006, D-04]
       parameters:
