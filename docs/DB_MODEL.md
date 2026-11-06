@@ -5,7 +5,7 @@ Phase 2의 ORM(`passport/db/models/`)과 초기 Alembic 마이그레이션은 �
 
 **[제안]** 표시는 승인이 필요한 설계 선택이다. 13장에 모았다.
 
-**2026-11-02 확정 반영:** Python IntEnum·smallint 저장, 사전 등록 이메일의 활성화·취소 즉시 삭제, 외부 로그아웃·철회의 정확한 대상 매핑, 외부 보안 변경 기록의 저장 성공 후 완료 응답, 탈퇴 완료 확인 키 24시간을 적용한다.
+**2026-11-02 확정 반영:** Python IntEnum·smallint 저장, 외부 로그아웃·철회의 정확한 대상 매핑, 외부 보안 변경 기록의 저장 성공 후 완료 응답, 탈퇴 완료 확인 키 24시간을 적용한다.
 
 **2026-11-05 탈퇴 정책 변경:** 탈퇴 시 `users` 행과 직접·간접 FK 자손을 같은 트랜잭션에서 물리 삭제한다. 개인정보 추가 보관과 탈퇴자 개인정보 조회는 제공하지 않으며 `audit_logs`는 보존한다. 사용자 FK가 없는 완료 확인·동기화·복원용 운영 기록은 개인정보 값 없이 각 보존 정책을 따른다.
 
@@ -22,7 +22,7 @@ Phase 2의 ORM(`passport/db/models/`)과 초기 Alembic 마이그레이션은 �
 | 열거 값 | Python `enum.IntEnum`의 명시적 정수 키(`.value`)를 PostgreSQL `smallint`에 저장한다. CHECK 적용 범위는 1.1절을 따른다 |
 | ETag | 변경 가능 리소스는 `version integer NOT NULL DEFAULT 1`. SQLAlchemy `version_id_col`로 매핑해 `UPDATE … WHERE version = :expected`가 되게 한다. ETag는 `"{version}"` |
 | 접근 자격 버전 | `access_version bigint NOT NULL DEFAULT 1`. `tenants`, `tenant_memberships`, `tenant_applications`에만 둔다(FR-APP-008-05). `version`과 별개다 |
-| 이메일 | 소문자 정규화 값만 저장한다(계약 `Email`). `users.user_email`은 애플리케이션에서 정규화·검증한다. 사전 등록 이메일도 같은 정규화를 적용한다 |
+| 이메일 | 소문자 정규화 값만 저장한다(계약 `Email`). `users.user_email`은 애플리케이션에서 정규화·검증한다 |
 | FK 삭제 동작 | 기본 `RESTRICT`. `users`를 참조하는 모든 FK와 그 자손으로 내려가는 FK는 `ON DELETE CASCADE`이며 표에 적는다. 공유 부모인 테넌트·서비스·OIDC 설정은 삭제하지 않는다. `audit_logs`에는 FK를 두지 않는다 |
 | CHECK 제외 테이블 | `users`, `user_securities`, `tenants`에는 열거값·형식·상태 조합을 포함한 모든 DB CHECK를 두지 않는다. 해당 값의 검증은 애플리케이션에서 수행한다 |
 | 표 읽는 법 | "NULL" 열이 `예`인 열만 NULL을 허용한다. "공통 열"은 `created_at`, `updated_at`, `version` 세 개다 |
@@ -44,13 +44,13 @@ Phase 2의 ORM(`passport/db/models/`)과 초기 Alembic 마이그레이션은 �
 | `TenantStatus` | `tenants.tenant_status` | `1=ACTIVE`, `2=SUSPENDED`, `3=DEACTIVATED` |
 | `ApplicationStatus` | `applications.status`, `tenant_applications.status` | `1=ACTIVE`, `2=INACTIVE` |
 | `OidcProviderType` | `tenant_oidc_configurations.provider_type` | `1=KEYCLOAK`, `2=AUTH0` |
-| `MemberProvisioning` | `tenant_oidc_configurations.member_provisioning` | `1=PRE_REGISTRATION`, `2=AUTO` |
+| `MemberProvisioning` | `tenant_oidc_configurations.member_provisioning` | `2=AUTO`, `3=MANUAL` |
 | `OidcConfigurationStatus` | `tenant_oidc_configurations.status` | `1=ENABLED`, `2=DISABLED` |
 | `OidcValidationStatus` | `tenant_oidc_configurations.last_validation_status` | `1=OK`, `2=FAILED` |
 | `OidcValidationError` | `tenant_oidc_configurations.last_validation_error_code` | `1=DISCOVERY_UNREACHABLE`, `2=ISSUER_MISMATCH`, `3=JWKS_UNREACHABLE`, `4=INVALID_CLIENT`, `5=UNSUPPORTED_LIFECYCLE_BINDING` |
 | `TenantRole` | `tenant_memberships.role` | `1=ADMIN`, `2=MEMBER` |
-| `MembershipStatus` | `tenant_memberships.membership_status` | `1=PRE_REGISTERED`, `2=ACTIVE`, `3=SUSPENDED`, `4=REMOVED` |
-| `MembershipRemovalReason` | `tenant_memberships.removed_reason` | `1=ADMIN_REMOVED`, `2=PRE_REGISTRATION_CANCELLED` |
+| `MembershipStatus` | `tenant_memberships.membership_status` | `2=ACTIVE`, `3=SUSPENDED`, `4=REMOVED` |
+| `MembershipRemovalReason` | `tenant_memberships.removed_reason` | `1=ADMIN_REMOVED` |
 | `AuthenticationMethod` | `logins.auth_method` | `1=LOCAL`, `2=OIDC` |
 | `ClientType` | `logins.client_type` | `1=WEB`, `2=NATIVE` |
 | `ReauthenticationMethod` | `logins.reauth_method` | `1=PASSWORD`, `2=OIDC` |
@@ -65,7 +65,7 @@ Phase 2의 ORM(`passport/db/models/`)과 초기 Alembic 마이그레이션은 �
 | `AuditTargetType` | `audit_logs.target_type` | `1=USER`, `2=TENANT`, `3=TENANT_MEMBERSHIP`, `4=APPLICATION`, `5=TENANT_APPLICATION`, `6=TENANT_OIDC_CONFIGURATION`, `7=LOGIN`, `8=IDENTITY`, `12=USER_PROFILE` |
 | `AuditAction` | `audit_logs.action` | 아래 `AuditAction` 키 표 |
 
-`AuditAction`의 키는 현재 API 계약에 있는 이벤트를 아래처럼 고정한다. 폐기한 `UserStatus` 키 `5`, `MembershipRemovalReason` 키 `3`, `LoginEndReason` 키 `10`, `AuditAction` 키 `9`·`10`·`15`~`21`·`24`·`29`~`31`, `AuditTargetType` 키 `9`~`11`·`13`은 재사용하지 않는다. 계약에 새 이벤트나 서버 내부 이벤트를 추가할 때 기존 키를 유지하고 새 키를 명시 배정한다.
+`AuditAction`의 키는 현재 API 계약에 있는 이벤트를 아래처럼 고정한다. 폐기한 `UserStatus` 키 `5`, `MemberProvisioning` 키 `1`, `MembershipStatus` 키 `1`, `MembershipRemovalReason` 키 `2`·`3`, `LoginEndReason` 키 `10`, `AuditAction` 키 `9`·`10`·`15`~`21`·`24`·`26`·`29`~`31`, `AuditTargetType` 키 `9`~`11`·`13`은 재사용하지 않는다. 계약에 새 이벤트나 서버 내부 이벤트를 추가할 때 기존 키를 유지하고 새 키를 명시 배정한다.
 
 | 키 | 이벤트 명칭 |
 | --- | --- |
@@ -84,7 +84,6 @@ Phase 2의 ORM(`passport/db/models/`)과 초기 Alembic 마이그레이션은 �
 | `22` | `TENANT.CREATED` |
 | `23` | `TENANT.UPDATED` |
 | `25` | `TENANT.OIDC_CONFIGURATION_CHANGED` |
-| `26` | `MEMBERSHIP.PRE_REGISTERED` |
 | `27` | `MEMBERSHIP.UPDATED` |
 | `28` | `MEMBERSHIP.REMOVED` |
 | `32` | `TENANT_APPLICATION.CHANGED` |
@@ -100,6 +99,7 @@ Phase 2의 ORM(`passport/db/models/`)과 초기 Alembic 마이그레이션은 �
 | `42` | `AUTH.OIDC_LOGIN_FAILED` |
 | `43` | `USER.CREATED_FROM_OIDC` |
 | `44` | `MEMBERSHIP.AUTO_PROVISIONED` |
+| `45` | `MEMBERSHIP.CREATED` |
 
 **비밀값 저장**
 
@@ -135,7 +135,7 @@ erDiagram
     USERS ||--|| USER_SECURITIES : security
     USERS ||--o{ IDENTITIES : external_identity
     USERS ||--o{ EMAIL_VERIFICATION_TOKENS : verifies
-    USERS |o--o{ TENANT_MEMBERSHIPS : belongs_to
+    USERS ||--o{ TENANT_MEMBERSHIPS : belongs_to
     TENANTS ||--o{ TENANT_MEMBERSHIPS : has
     TENANTS ||--o| TENANT_OIDC_CONFIGURATIONS : configures
     TENANT_OIDC_CONFIGURATIONS ||--o{ IDENTITIES : linked_via
@@ -295,7 +295,7 @@ erDiagram
 | `client_id` | varchar(255) | | | |
 | `client_secret_ciphertext` | bytea | | | 암호문. 응답은 설정 여부만 준다 |
 | `scopes` | text[] | | `{openid,email,profile}` | |
-| `member_provisioning` | smallint | | `1` | `MemberProvisioning`. `pre_registration`, `auto`(D-08) |
+| `member_provisioning` | smallint | | `3` | `MemberProvisioning`. `manual`, `auto`(D-08) |
 | `status` | smallint | | | `OidcConfigurationStatus`. `enabled`, `disabled` |
 | `trust_version` | integer | | `1` | 신뢰 변경마다 1 증가(계약 `putTenantOidcConfiguration`) |
 | `last_validation_status` | smallint | | | `OidcValidationStatus`. `ok`, `failed` |
@@ -310,29 +310,25 @@ erDiagram
 
 **목적:** 사용자와 전역 테넌트 사이의 소속 관계, 테넌트 내 역할 및 이용 상태를 관리한다.
 
-**역할:** 사전 등록부터 활성·비활성·해지까지의 소속 상태를 기록하여 테넌트 접근과 관리자 권한을 판단하는 기준을 제공한다. 멤버십별 접근 자격 버전과 해지 이력을 유지하여 캐시 검증과 재가입 판단을 지원한다.
+**역할:** 계정이 존재하는 사용자의 활성·비활성·해지 소속 상태를 기록하여 테넌트 접근과 관리자 권한을 판단하는 기준을 제공한다. 멤버십별 접근 자격 버전과 해지 이력을 유지하여 캐시 검증과 재가입 판단을 지원한다.
 
 | 컬럼 | 형식 | NULL | 기본값 | 설명 |
 | --- | --- | --- | --- | --- |
 | `id` | uuid | | UUIDv7 | `membership_id` |
 | `tenant_id` | uuid | | | FK `tenants` |
-| `user_id` | uuid | 예 | | FK `users` `CASCADE`. `pre_registered`면 NULL |
-| `pre_registered_email` | varchar(254) | 예 | | 사전 등록 이메일(정규화). `pre_registered` 동안만 보관하며 활성화·취소 즉시 NULL로 바꾼다 |
+| `user_id` | uuid | | | FK `users` `CASCADE`. 기존 사용자 계정 필수 |
 | `role` | smallint | | `2` | `TenantRole`. `admin`, `member` |
-| `membership_status` | smallint | | | `MembershipStatus`. `pre_registered`, `active`, `suspended`, `removed` |
+| `membership_status` | smallint | | `2` | `MembershipStatus`. `active`, `suspended`, `removed` |
 | `access_version` | bigint | | `1` | 상태·역할 변경마다 1 증가 |
 | `joined_at` | timestamptz | 예 | | 처음 `active`가 된 시각 |
 | `removed_at` | timestamptz | 예 | | |
-| `removed_reason` | smallint | 예 | | `MembershipRemovalReason`. `admin_removed`, `pre_registration_cancelled` |
+| `removed_reason` | smallint | 예 | | `MembershipRemovalReason`. `admin_removed` |
 | 공통 열 | | | | |
 
-- CHECK `ck_tenant_memberships_state`:
-  `(membership_status = 1 AND user_id IS NULL AND pre_registered_email IS NOT NULL) OR (membership_status IN (2, 3) AND user_id IS NOT NULL) OR membership_status = 4`
 - CHECK `ck_tenant_memberships_removed`: `(membership_status = 4) = (removed_at IS NOT NULL AND removed_reason IS NOT NULL)`
-- FR-MEM-005-01의 이메일 보존 규칙을 CHECK `ck_tenant_memberships_email_lifecycle`로 강제한다: `(membership_status = 1) = (pre_registered_email IS NOT NULL)`
 - 부분 UNIQUE `uq_tenant_memberships_tenant_user` (`tenant_id`, `user_id`) `WHERE membership_status <> 4`: 중복 소속 방지(FR-MEM-005)
-- 부분 UNIQUE `uq_tenant_memberships_tenant_email` (`tenant_id`, `pre_registered_email`) `WHERE membership_status = 1`
 - 인덱스 `user_id`(`listMyTenants`), (`tenant_id`, `membership_status`)
+- 관리자가 기존 `user_id`로 추가하면 `active`와 `joined_at`을 함께 설정한다. 존재하지 않는 사용자면 404, 현재 소속 중복은 409다. 해지 이력이 있으면 일반 추가로 우회하지 않고 P1 재가입 신청·승인을 따른다. OIDC 자동 등록은 `auto`에서 이전 멤버십이 없는 사용자에게만 허용한다. `manual`에서는 계정·기본 로그인만 생성하고 관리자 추가 전까지 테넌트 토큰을 발급하지 않는다.
 - 계정이 존재하는 동안 `removed` 행은 감사와 P1 재가입 판단을 위해 보존한다(FR-MEM-008). 계정 탈퇴 시에는 과거 `removed` 행을 포함한 모든 소속 행을 FK 연쇄 삭제한다. 관리자 해지 후 재가입은 새 행이다.
 
 ### 4.3 서비스
@@ -685,14 +681,12 @@ erDiagram
 
 | 전이 | 주체 |
 | --- | --- |
-| 없음 → `pre_registered` | 테넌트 관리자 사전 등록 |
-| `pre_registered` → `active` | 같은 이메일 사용자의 첫 토큰 요청, 이 테넌트 OIDC 로그인 |
-| 없음 → `active` | 테넌트 생성자(`admin`), OIDC 자동 등록(`member`) |
+| 없음 → `active` | 테넌트 관리자의 기존 사용자 추가, 테넌트 생성자(`admin`), OIDC 자동 등록(`member`) |
 | `active` ↔ `suspended` | 테넌트 관리자 |
-| `pre_registered`, `active`, `suspended` → `removed` | 테넌트 관리자 해지·사전 등록 취소. 계정이 존재하는 동안 보존 |
+| `active`, `suspended` → `removed` | 테넌트 관리자 해지. 계정이 존재하는 동안 보존 |
 | 모든 상태 → 행 삭제 | 본인 탈퇴 시 FK 연쇄 삭제. 과거 `removed`도 포함 |
 
-상태 또는 역할이 바뀔 때마다 `access_version`을 1 올린다. 사전 등록 활성화·취소와 같은 트랜잭션에서 `pre_registered_email`을 NULL로 바꾼다.
+생성 시 `access_version = 1`로 시작하며 상태 또는 역할이 바뀔 때마다 1 올린다. 토큰 발급·갱신은 멤버십을 생성하거나 활성화하지 않는다.
 
 ### 5.3 테넌트, 서비스
 
@@ -750,27 +744,28 @@ erDiagram
 | Local 가입 | `users`, 비밀번호 해시·알고리즘·변경 시각을 설정한 `user_securities`, `email_verification_tokens` 삽입 | 이메일 UNIQUE 위반이면 롤백하고 안내 메일만 보낸다(응답은 항상 202) |
 | 이메일 확인 | 토큰 소비, `email_verified_at`, `users.user_status = active` | 원자적 소비 |
 | Local 로그인·비밀번호 재인증 | `user_securities` 잠금·자격 증명 확인 및 실패/성공 통계 갱신. 새 로그인이면 `logins`, `refresh_token_families`, `refresh_tokens` 삽입, 포털이면 `bff_sessions`도 | 보안 행 `FOR UPDATE`로 판정·갱신을 직렬화한다. 실패 통계는 실패 응답 전에 커밋하며 새 로그인은 새 세션 ID를 발급한다 |
-| 토큰 발급·갱신 | 계열 잠금, 토큰 회전, 사전 등록 멤버십 활성화·이메일 삭제 | `SELECT … FROM refresh_token_families WHERE id = :id FOR UPDATE`로 같은 계열을 직렬화한다. 포털 BFF는 잠금 안에서 최신 저장 토큰을 읽고, 회전과 `bff_sessions`의 토큰 교체를 같은 트랜잭션에서 커밋한다. 회전된 토큰이 제출되면 사용자의 모든 로그인을 끝내고 커밋한 뒤 401이다. 503이나 조건 미충족이면 롤백해 회전하지 않는다 |
+| 토큰 발급·갱신 | 계열 잠금, 현재 접근 자격 확인, 토큰 회전 | `SELECT … FROM refresh_token_families WHERE id = :id FOR UPDATE`로 같은 계열을 직렬화한다. 포털 BFF는 잠금 안에서 최신 저장 토큰을 읽고, 회전과 `bff_sessions`의 토큰 교체를 같은 트랜잭션에서 커밋한다. 회전된 토큰이 제출되면 사용자의 모든 로그인을 끝내고 커밋한 뒤 401이다. 503이나 조건 미충족이면 롤백해 회전하지 않는다 |
 | 로그아웃, 비밀번호 변경, 계정 차단 | `logins` 종료, `bff_sessions` 삭제. 비밀번호 변경이면 `user_securities`의 비밀번호 해시·알고리즘·변경 시각·변경 필요 여부·실패/잠금 상태도 갱신 | `WHERE ended_at IS NULL`. 비밀번호 변경은 보안 행을 잠그고 로그인·재인증과 직렬화한다 |
-| OIDC 콜백 | 브라우저 바인딩 대조 후 트랜잭션 소비, 사용자·신원 생성 또는 조회. 신규 계정은 `user_securities`도 생성하고 새 로그인 성공이면 `last_login_at` 갱신. 멤버십 활성화·이메일 삭제·자동 등록, `logins`·`oidc_login_bindings`·계열·`bff_sessions` 생성, 또는 링크 티켓 발급 | 원자적 소비, 신원 UNIQUE. Local 실패·잠금은 변경하지 않는다. 로그인에 `oidc_trust_version`을 남겨 설정 변경과의 경합을 요청 시 검사로 막는다 |
+| OIDC 콜백 | 브라우저 바인딩 대조 후 트랜잭션 소비, 사용자·신원 생성 또는 조회. 신규 계정은 `user_securities`도 생성하고 새 로그인 성공이면 `last_login_at` 갱신. `auto`에서만 멤버십 자동 등록, `logins`·`oidc_login_bindings`·계열·`bff_sessions` 생성, 또는 링크 티켓 발급 | 원자적 소비, 신원 UNIQUE. `manual`에서 소속 이력이 없으면 계정·기본 로그인 생성을 커밋하되 테넌트 접근은 관리자 추가 전까지 거부한다. 해지·비활성 멤버십은 자동 복구하지 않는다. Local 실패·잠금은 변경하지 않는다. 로그인에 `oidc_trust_version`을 남겨 설정 변경과의 경합을 요청 시 검사로 막는다 |
 | 외부 신원 연결 | 링크 티켓 소비, `identities` 삽입 | UNIQUE 위반 → `409 identity_already_linked` |
 | SSO 코드 발급·교환 | 발급: 코드 삽입. 교환: 코드 소비, 계열·토큰 삽입, 코드에 계열 기록 | 원자적 소비. 이미 소비된 코드면 기록된 계열을 폐기한다 |
 | 테넌트 생성 | `tenants`, 생성자 `admin` 멤버십 삽입 | `code` UNIQUE → `409 already_exists` |
+| 멤버 추가 | 기존 사용자 확인, `active` 멤버십·`joined_at`·초기 버전 `1` 삽입, 멱등 결과·버전 동기화 기록 | 사용자 FK와 부분 UNIQUE로 탈퇴·동시 추가와의 경합을 막는다. 커밋 후 Valkey 반영을 마쳐야 201이다. 같은 멱등 키 재시도는 원 결과를 반환한다 |
 | 접근 자격 변경 | 8장 | 마지막 관리자 검사는 그 테넌트의 `active` `admin` 멤버십을 `FOR UPDATE`로 잠근 뒤 센다 |
 | OIDC 설정 변경 | 설정 갱신, 신뢰 변경이면 `trust_version` + 1과 로그인 종료 | ETag |
 | 탈퇴 | 9.2절. `withdrawal_receipts`도 원 멱등 키와 함께 삽입 | 접근 자격 변경 규약. 완료 재시도는 전용 확인 키로만 원 요청에 연결 |
 
 ## 8. 접근 자격 버전과 Valkey
 
-원본은 DB의 `access_version`이고, Valkey는 Passport 검증 경로의 버전 캐시다(FR-APP-008-07). 보안 변경 기록의 영속화·완료 확인은 아래 처리에 9.4절을 함께 적용한다.
+원본은 DB의 `access_version`이고, Valkey는 Passport 검증 경로의 버전 캐시다(FR-APP-008-07). 9.4절 대상 작업은 아래 처리와 함께 외부 보안 기록의 영속화·완료 확인도 적용한다.
 
 1. 변경 API는 한 트랜잭션에서 다음을 한다. 9.4절 대상이면 상태 변경 전에 외부 변경 의도의 영속화를 확인한다.
    - `idempotency_keys`에 먼저 삽입한다. 같은 키의 동시 요청은 UNIQUE 인덱스에서 기다렸다가 처음 결과를 재생한다. 멱등 키 확인은 `If-Match` 평가보다 먼저다(계약 8장).
-   - 상태를 바꾸고 `access_version`을 1 올린다(FR-APP-008-06). 탈퇴로 삭제할 멤버십은 삭제 직전 버전 + 1을 최종 무효화 버전으로 확보하고 실제 행은 삭제한다.
+   - 상태를 바꾸고 `access_version`을 1 올린다(FR-APP-008-06). 멤버 추가는 초기 버전 `1`을 기록한다. 탈퇴로 삭제할 멤버십은 삭제 직전 버전 + 1을 최종 무효화 버전으로 확보하고 실제 행은 삭제한다.
    - `access_version_syncs`에 `version = GREATEST(기존, 새 값)`로 upsert한다.
    - 돌려줄 응답을 `idempotency_keys`에 기록한다.
 2. 커밋 후 `access_version_syncs`에 남은 행을 Valkey에 "더 클 때만 쓰기"로 반영하고(이전 버전으로 덮어쓰지 않음), 반영한 버전 이하인 행을 지운다. 삭제한 멤버십도 큐에 저장한 최종 무효화 버전을 반영하므로 원 행 없이 재시도할 수 있다. 이 버전만으로 접근을 허용하지 않고 6의 DB 존재·상태 검사를 적용한다. 평소 이 테이블은 비어 있으므로 남은 행 전체를 반영해도 비용이 작다.
-3. 2와 9.4절의 외부 기록 확인이 끝나야 성공을 응답한다. Valkey 반영 실패는 `503 access_sync_pending`, 외부 기록 확인 실패는 `503 security_record_pending`이다. 재시도할 행은 남는다.
+3. 2와 대상 작업의 9.4절 외부 기록 확인이 끝나야 성공을 응답한다. Valkey 반영 실패는 `503 access_sync_pending`, 외부 기록 확인 실패는 `503 security_record_pending`이다. 재시도할 행은 남는다.
 4. 같은 `Idempotency-Key`로 재시도하면 상태를 다시 바꾸지 않는다. 원 작업의 외부 커밋 확인과 2를 다시 수행하고 저장된 응답을 돌려준다(FR-APP-008-09). 행의 `version`은 upsert로 항상 최신 커밋 값이다. 탈퇴의 로그인 종료 후 재시도는 9.2절의 전용 완료 경로를 사용한다.
 5. **[제안]** 정리 작업이 10초마다 2를 실행한다. 클라이언트가 재시도하지 않아도 Valkey가 뒤처진 채로 남지 않게 하기 위해서다.
 6. `verifyAccess`는 매 요청 DB에서 사용자·로그인 존재 여부와 관련 세 단위의 현재 커밋된 상태·버전을 함께 읽는다. 삭제된 사용자·로그인·멤버십은 접근 거부이며 DB 연결 장애로 검증할 수 없는 경우와 구분한다. **SaaS 버전 = Valkey 버전 = DB 버전**이고 현재 자격도 유효할 때만 `fresh`다. Valkey 값 누락·불일치·장애이면 DB 결과로 검증하고 현재 자격을 함께 반환한다(캐시를 보냈으면 `stale`, 없으면 `absent`). DB 검증 실패 시 `503 entitlement_unverifiable`이며 기존 로그인은 유지한다(FR-APP-008-08).
@@ -795,12 +790,11 @@ erDiagram
 
 다음을 한 트랜잭션에서 처리한다. 개인정보를 별도 보관 테이블로 복사하지 않는다.
 
-1. 원 멱등 행을 확보한 뒤 대상 `users` 행과 멤버십을 잠그고 재인증·탈퇴 확정·기존 마지막 관리자 제한을 검사한다. 사전 등록 정리에 사용할 이메일과 삭제 대상 ID·멤버십 버전을 확보한다.
+1. 원 멱등 행을 확보한 뒤 대상 `users` 행과 멤버십을 잠그고 재인증·탈퇴 확정·기존 마지막 관리자 제한을 검사한다. 삭제 대상 ID·멤버십 버전을 확보한다.
 2. 9.4절에 따라 사용자 및 직접·간접 FK 자손 삭제 의도를 외부에 영속 기록한다. 삭제할 멤버십의 직전 `access_version` + 1을 최종 무효화 버전으로 `access_version_syncs`에 기록한다.
-3. 같은 이메일의 미활성 사전 등록 행과 본인의 과거 사전 등록 이메일 잔여값을 정리한다. 같은 이메일의 미활성 사전 등록은 사용자 FK가 NULL이므로 명시적으로 삭제한다.
-4. `DELETE FROM users WHERE user_id = :user_id`로 계정을 삭제한다. 6.1절의 모든 FK 자손은 과거 해지 멤버십·종료 로그인을 포함하여 연쇄 삭제한다. 인증 비밀값과 외부 연결 정보도 사용자 행 또는 자손과 함께 삭제된다. 테넌트·서비스·OIDC 설정은 유지한다.
-5. `audit_logs`에 원 사용자 ID·탈퇴 시각·삭제 결과를 기록하고 기존 감사로그는 유지한다. 삭제 대상 사용자 프로필을 포함하는 기존 멱등 응답은 요청자와 관계없이 제거하며 본인의 기존 멱등 기록도 정리한다. 원 탈퇴의 개인정보 없는 `204` 멱등 기록·`withdrawal_receipts`와 `security_change_events`를 함께 커밋한다.
-6. 커밋 후 외부 커밋 확인과 8장의 최종 무효화 버전 반영을 마쳐야 성공한다. 삭제된 사용자·로그인·멤버십의 토큰은 DB 존재 검사로 즉시 거부하며 탈퇴 전 ID를 다시 사용하지 않는다.
+3. `DELETE FROM users WHERE user_id = :user_id`로 계정을 삭제한다. 6.1절의 모든 FK 자손은 과거 해지 멤버십·종료 로그인을 포함하여 연쇄 삭제한다. 인증 비밀값과 외부 연결 정보도 사용자 행 또는 자손과 함께 삭제된다. 테넌트·서비스·OIDC 설정은 유지한다.
+4. `audit_logs`에 원 사용자 ID·탈퇴 시각·삭제 결과를 기록하고 기존 감사로그는 유지한다. 삭제 대상 사용자 프로필을 포함하는 기존 멱등 응답은 요청자와 관계없이 제거하며 본인의 기존 멱등 기록도 정리한다. 원 탈퇴의 개인정보 없는 `204` 멱등 기록·`withdrawal_receipts`와 `security_change_events`를 함께 커밋한다.
+5. 커밋 후 외부 커밋 확인과 8장의 최종 무효화 버전 반영을 마쳐야 성공한다. 삭제된 사용자·로그인·멤버십의 토큰은 DB 존재 검사로 즉시 거부하며 탈퇴 전 ID를 다시 사용하지 않는다.
 
 탈퇴 시각은 `audit_logs.occurred_at` 및 외부 보안 기록에 남는다. `users`에 탈퇴 상태 행을 남기거나 개인정보를 24시간 추가 보관하지 않는다.
 
@@ -820,7 +814,7 @@ erDiagram
 
 외부 저장소는 Passport DB·그 백업과 장애 영역 및 복원 절차가 독립적이어야 한다. 설치별 단조 증가 순번, `event_id` 멱등 기록, 영속 저장 확인, 무결성 검증과 보존 중 삭제 방지를 제공한다. 제품 선택은 구현 사항이며 로컬 파일이나 DB 내 원장만으로 대체하지 않는다.
 
-- **기록 대상:** 탈퇴, 계정 차단·비활성화, 멤버십 해지·비활성화·사전 등록 취소, 테넌트·서비스 이용 중지, 개인정보·인증 수단의 삭제. 대응하는 재활성화·재부여도 순서대로 기록하여 과거 차단을 무조건 재적용하지 않는다. 삭제한 비밀값의 복원 대신 해당 인증 수단을 무효화한다.
+- **기록 대상:** 탈퇴, 계정 차단·비활성화, 멤버십 해지·비활성화, 테넌트·서비스 이용 중지, 개인정보·인증 수단의 삭제. 대응하는 재활성화·재부여도 순서대로 기록하여 과거 차단을 무조건 재적용하지 않는다. 삭제한 비밀값의 복원 대신 해당 인증 수단을 무효화한다.
 - **내용:** 기록 형식 버전(`schema_version`), 설치 ID, `event_id`, 외부 순번, 원 작업 ID, 대상 ID·상태 버전·변경/삭제 명령·시각·무결성 정보만 보관한다. 탈퇴 시 원래 탈퇴 시각·삭제한 사용자 ID·FK 자손 ID·대상 멤버십의 최종 무효화 버전을 포함한다. 프로필 값, 삭제된 개인정보·비밀값·토큰 원문은 복사하지 않는다.
 - **쓰기 순서:** HTTP 변경 요청은 `Idempotency-Key`가 필수다. 먼저 원 멱등 행을 확보하고 대상 행을 잠그고 검증한 뒤 변경 의도를 외부에 영속 기록한다. 실패하면 DB 변경을 롤백하고 `503 security_record_pending`(`db_committed: false`, `security_recorded: false`)이다. 성공하면 상태·버전·`security_change_events`·필요한 멱등/확인 키를 같은 DB 트랜잭션에서 커밋한다. 이후 외부에 DB 커밋 확인을 멱등 기록하고 `confirmed_at`을 채운다. 이 확인과 필요한 Valkey 반영을 마쳐야 성공을 응답한다.
 - **부분 실패:** DB 커밋 후 외부 확인 실패는 `503 security_record_pending`(`db_committed: true`, `security_recorded: false`)이며 DB 변경을 유지한다. 작업 ID로 원 이벤트를 찾아 외부 확인·캐시 반영만 재시도한다. 탈퇴는 9.2절 완료 경로를 사용한다. 서버 작업도 미확인 이벤트를 재처리한다.
@@ -838,7 +832,7 @@ erDiagram
 | --- | --- | --- | --- |
 | 가입·이메일 확인 | `signupLocal`, `confirmEmailVerification`, `resendEmailVerification` | `users` | `users`, `user_securities`, `email_verification_tokens` |
 | Local 로그인·재인증 | `loginLocal`, `ssoLoginLocal`, `reauthenticateWithPassword` | `users`, `user_securities` | `user_securities`, `logins`, `refresh_token_families`, `refresh_tokens`, `bff_sessions` |
-| 토큰 | `issueToken`, `ssoSelectContext`, `exchangeSsoCode` | `logins`, `tenants`, `tenant_memberships`, `tenant_applications`, `applications`, `tenant_oidc_configurations` | `refresh_tokens`, `tenant_memberships`(사전 등록 활성화), `sso_authorization_codes`, `bff_sessions`, `logins` |
+| 토큰 | `issueToken`, `ssoSelectContext`, `exchangeSsoCode` | `logins`, `tenants`, `tenant_memberships`, `tenant_applications`, `applications`, `tenant_oidc_configurations` | `refresh_tokens`, `sso_authorization_codes`, `bff_sessions`, `logins` |
 | 로그아웃·세션 | `logout`, `logoutAll`, `ssoLogout`, `ssoLogoutAll`, `ssoGetSession` | `bff_sessions`, `logins`, `refresh_tokens` | `logins`, `bff_sessions` |
 | JWKS | `getJwks` | `signing_keys` | |
 | OIDC | `getTenantLoginOptions`, `ssoStartOidcAuthorization`, `ssoOidcCallback` | `tenants`, `tenant_oidc_configurations`, `identities` | `oidc_login_transactions`, `users`, `user_securities`, `identities`, `tenant_memberships`, `logins`, `oidc_login_bindings`, 계열·토큰, `bff_sessions`, `identity_link_tickets` |
@@ -867,7 +861,7 @@ erDiagram
 | FR-OIDC-007, 008, 012 | `oidc_login_transactions` |
 | FR-OIDC-013, 015~018, 017-01 | `logins.tenant_id`, `identity_id`, `end_reason`, `oidc_login_bindings` |
 | FR-TEN-001~004, D-05 | `tenants` |
-| FR-MEM-001~005, 005-01, 008 | `tenant_memberships` 부분 UNIQUE·이메일 생명주기 CHECK, 계정 존속 중 `removed` 보존·탈퇴 시 연쇄 삭제 |
+| FR-MEM-001~005, 005-01, 008 | `tenant_memberships.user_id` NOT NULL·FK·부분 UNIQUE, 기존 사용자 추가, 계정 존속 중 `removed` 보존·탈퇴 시 연쇄 삭제 |
 | FR-APP-001~005, 007, D-07 | `applications`, `tenant_applications` |
 | FR-APP-008-01~09 | `access_version`, `idempotency_keys`, `access_version_syncs`, 8장 |
 | NFR-SEC-006, 008 | 1장 비밀값 저장, 9.2절 개인정보 즉시 삭제 |
@@ -893,7 +887,8 @@ erDiagram
    - 삭제된 멤버십의 최종 무효화 버전 반영, 사용자 행 없이 탈퇴 완료 확인 재시도, 사용자 FK 없는 운영 기록의 개인정보 비포함, 백업 복원 시 사용자·자손 재삭제를 검증한다.
    - 계정별 보안 행 1:1·연쇄 삭제, 알고리즘 키/PHC 일치, 실패 카운터의 동시 갱신·실패 응답 후 보존, 잠금 만료·성공 초기화, 새 Local/OIDC 로그인에서만 마지막 로그인 시각 갱신을 검증한다.
    - Enum의 정수 키·기본값·적용 대상의 상태 CHECK·부분 인덱스가 1.1절과 같은지, ORM에서 Enum으로 왕복 변환되는지 검증한다. 알 수 없는 키는 애플리케이션에서 거부하고 API에는 문자열 명칭으로 반환되는지 확인한다.
-   - 사전 등록 활성화·취소의 이메일 삭제, 다른 브라우저 콜백 거부, 외부 세션·토큰별 종료 범위를 검증한다.
+   - 기존 사용자 추가의 즉시 활성화·멱등 재시도, 존재하지 않는 사용자·중복 소속·해지 이력의 추가 거부, 수동 모드의 기본 로그인과 테넌트 접근 차단, 자동 등록 모드 유지, 토큰 발급·갱신 시 소속 불변을 검증한다.
+   - 다른 브라우저 콜백 거부, 외부 세션·토큰별 종료 범위를 검증한다.
    - Valkey 이전 값 복구, 탈퇴 응답 유실 후 24시간 완료 확인, 외부 기록의 커밋 전·후 실패와 복원 재적용을 통합 검증한다.
 
 ## 12. 6장 논리 모델과의 차이

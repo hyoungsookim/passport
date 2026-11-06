@@ -23,7 +23,7 @@ info:
       - **서비스 이용 활성화 권한**: 테넌트 관리자는 자기 테넌트에서, 플랫폼 관리자는 모든
         테넌트에서 TenantApplication을 활성화·중단할 수 있다.
 
-    **2026-11-02 확정 보완**: 사전 등록 이메일 즉시 삭제, 외부 로그아웃·철회의 정확한 대상 매핑,
+    **2026-11-02 확정 보완**: 외부 로그아웃·철회의 정확한 대상 매핑,
     독립 외부 보안 기록 영속화 후 완료 응답, 탈퇴 확인 키 24시간을 적용한다.
     OIDC 시작·콜백은 최초 브라우저에 바인딩하며, 캐시 버전은 DB 현재 버전과 대조한다.
 
@@ -261,10 +261,10 @@ info:
       - 같은 키에 다른 본문이 오면 `422 idempotency_key_reused`이다.
       - **[제안]** 키는 24시간 보관한다.
       - 멱등 키 확인은 `If-Match` 평가보다 먼저 한다. 그래서 커밋 후 재시도할 때 바뀐 ETag 때문에 실패하지 않는다.
-    - **접근 자격 변경 API**(FR-APP-008): 멤버십 상태 변경·제거, 테넌트 상태 변경, TenantApplication 변경, 계정 탈퇴.
-      1. 9.4절 외부 변경 의도 영속화를 확인한 뒤 상태 변경과 관련 `access_version` 증가를 한 DB 트랜잭션으로 커밋한다(FR-APP-008-06). 탈퇴는 삭제할 멤버십의 직전 버전 + 1을 최종 무효화 버전으로 큐·외부 기록에 남기고 사용자 및 FK 자손을 삭제한다.
+    - **접근 자격 변경 API**(FR-APP-008): 멤버십 추가·상태 변경·제거, 테넌트 상태 변경, TenantApplication 변경, 계정 탈퇴.
+      1. 9.4절 대상이면 외부 변경 의도 영속화를 확인한 뒤 상태 변경과 관련 `access_version` 증가를 한 DB 트랜잭션으로 커밋한다(FR-APP-008-06). 멤버 추가는 초기 버전 `1`을 기록한다. 탈퇴는 삭제할 멤버십의 직전 버전 + 1을 최종 무효화 버전으로 큐·외부 기록에 남기고 사용자 및 FK 자손을 삭제한다.
       2. 커밋 후 최신 버전을 Valkey 검증 경로에 반영한다. 삭제한 멤버십은 큐의 최종 무효화 버전을 사용하며 사용자·멤버십 행 없이도 재시도한다. 이전 버전으로 덮어쓰지 않는다(FR-APP-008-07).
-      3. 1과 2 및 외부 커밋 확인이 끝난 뒤에만 성공을 응답한다. 이 응답 이후 시작된 해당 범위의 신규 요청은 거부된다(FR-APP-008-01).
+      3. 1과 2 및 대상 작업의 외부 커밋 확인이 끝난 뒤에만 성공을 응답한다. 이 응답 이후 시작된 해당 범위의 신규 요청에는 변경 후 접근 자격을 적용하며, 자격을 회수한 경우 거부한다(FR-APP-008-01).
       4. 2가 실패하면 `503 access_sync_pending`을 반환한다. 본문의 `db_committed: true`, `cache_synced: false`로
          저장 완료와 반영 미완료를 구분한다. 같은 `Idempotency-Key`로 재시도하면 상태·버전을 다시 바꾸지 않고,
          원 작업의 외부 커밋 확인과 최신 DB 상태·버전의 Valkey 반영을 마친 뒤 처음 결과를 반환한다(FR-APP-008-09).
@@ -378,11 +378,10 @@ info:
        - 같은 이메일의 기존 계정이 있으면 생성하지 않는다. `link_required`와 링크 티켓으로 돌려보낸다(F-04).
     5. 멤버십을 확인한다.
        - 활성 멤버십이 있으면 진행한다.
-       - 사전 등록(`pre_registered`)된 이메일이면 활성화하고 같은 트랜잭션에서 사전 등록 이메일을 삭제한다.
        - 자동 등록 모드이고 이전 멤버십이 없으면 `member`로 등록한다.
-       - 해지·비활성 멤버십은 자동 복구하지 않는다(FR-MEM-008).
-       - 조건을 충족하지 않으면 로그인을 만들지 않고 `membership_required`로 돌려보낸다.
-    6. 로그인을 만들고 Passport SSO가 토큰을 서버에 저장한 후 세션 쿠키를 설정한다. 등록된 SSO 완료 경로로 이동하며 브라우저에 토큰은 전달하지 않는다.
+       - 수동 등록(`manual`) 모드이고 소속 이력이 없으면 멤버십을 생성하지 않고 계정·기본 로그인 생성만 진행한다. 관리자가 `user_id`로 추가하기 전까지 테넌트 토큰 발급·접근은 거부한다.
+       - 해지·비활성 멤버십은 자동 복구하지 않으며, 로그인을 만들지 않고 `membership_required`로 돌려보낸다(FR-MEM-008).
+    6. 로그인을 만들고 Passport SSO가 기본·Refresh Token을 서버에 저장한 후 세션 쿠키를 설정한다. 로그인에는 검증한 테넌트·OIDC 설정·신뢰 버전과 외부 종료 대상 매핑을 유지한다. 등록된 SSO 완료 경로로 이동하며 브라우저에 토큰은 전달하지 않는다.
     7. 포털은 `GET /sso/auth/session`으로 상태를 확인하고 `POST /sso/auth/context`로 테넌트를 선택한다.
 
     콜백 결과는 URL 조각(`#`)으로만 전달한다. 서버 로그와 Referer에 남지 않게 하기 위해서다.
@@ -436,7 +435,7 @@ info:
        `Idempotency-Key`·`Withdrawal-Receipt`와 함께 호출한다.
        - 즉시 완료되며 유예와 취소는 없다.
        - 사용자와 모든 FK 자손을 같은 트랜잭션에서 물리 삭제한다. 과거 해지 멤버십·종료 로그인·토큰도 삭제하며 기존 토큰은 거부한다. 응답과 함께 SSO 세션 쿠키가 지워진다.
-       - 같은 이메일의 미활성 사전 등록도 삭제하며 개인정보를 추가 보관하지 않는다. 감사로그와 사용자 FK 없는 원 탈퇴 완료 확인·동기화·복원용 기록은 개인정보 값 없이 유지한다.
+       - 개인정보를 추가 보관하지 않는다. 감사로그와 사용자 FK 없는 원 탈퇴 완료 확인·동기화·복원용 기록은 개인정보 값 없이 유지한다.
     3. 응답 유실·503 또는 세션 무효화로 원 API가 401이면 `/sso/auth/withdrawals/complete`에 같은 확인 키를 보낸다.
        - 유효한 키로 커밋된 원 요청의 외부 기록·Valkey 반영을 재개하고, 완료 시 204를 반환한다.
        - 미커밋 요청·불명·만료 키는 동일한 404다. 키는 첫 커밋부터 24시간만 유효하고 연장하지 않는다.
@@ -512,7 +511,7 @@ info:
 
     - `Tenant.code`(로그인 링크·코드 입력용 고유 슬러그, FR-OIDC-011)
     - `TenantOIDCConfiguration`: `provider_type`, `display_name`, `member_provisioning`, `trust_version`, `last_validation`
-    - `TenantMembership.status`에 `pre_registered`와 사전 등록 이메일(활성화·취소 즉시 삭제)
+    - `TenantMembership.user_id`는 필수 사용자 FK이며, 기존 계정 추가 시 `status = active`로 생성
     - `Application`: `audience`(= `code`), 서비스 자격 증명 해시
     - 로그인, 클라이언트별 Refresh Token 계열, SSO 세션·서버 측 토큰 저장 참조·무효화 연계, SSO 클라이언트·허용 redirect URI·일회용 인가 코드·PKCE, OIDC 로그인 트랜잭션, 링크 티켓, 이메일 확인 토큰, 멱등 키 저장소
     - 모든 변경 가능 리소스의 버전(ETag 원천)
@@ -527,7 +526,7 @@ info:
     | --- | --- | --- |
     | 계정 | `pending_verification`, `active`, `suspended`, `deactivated` | 탈퇴 시 행 삭제. 폐기한 DB 상태 키 5는 재사용하지 않음 |
     | 테넌트 | `active`, `suspended`, `deactivated` | |
-    | 멤버십 | `pre_registered`, `active`, `suspended`, `removed` | `suspended`는 비활성화, `removed`는 해지 |
+    | 멤버십 | `active`, `suspended`, `removed` | 생성 시 `active`, `suspended`는 비활성화, `removed`는 해지 |
     | Application, TenantApplication | `active`, `inactive` | 목록에는 TenantApplication 레코드가 없는 상태를 `not_enabled`로 표시 |
     | OIDC 설정 | `enabled`, `disabled` | 검증 실패는 `last_validation.status = failed` |
 
@@ -541,7 +540,6 @@ info:
     5. 비밀번호 정책: 12~128자, 조합 규칙 없음, 이메일과 같은 값 금지. 유출 비밀번호 목록 대조 여부.
     6. 속도·실패 제한 수치(10장).
     7. 테넌트 코드 형식(`^[a-z0-9](?:[a-z0-9-]{1,30}[a-z0-9])$`)과 생성 후 변경 불가.
-    8. 사전 등록 멤버십의 이메일 매칭. OIDC는 Provider가 `email_verified = true`로 준 이메일만 쓰고, Local은 확인된 이메일만 쓴다.
 
     ## 17. SSO 경계의 추가 검증
     - SSO 세션 쿠키의 값은 비밀 식별자이며 LoginInfo.login_id로 대체할 수 없다.
@@ -776,7 +774,6 @@ paths:
       - FR-APP-005
       - D-03
       - SC-04
-      - FR-MEM-005-01
       parameters:
       - $ref: '#/components/parameters/RequestId'
       requestBody:
@@ -1169,7 +1166,7 @@ paths:
         최근 재인증이 필요하다(5장). 확정하면 유예기간 없이 즉시 탈퇴하며, 취소와 복구는 없다(FR-USER-005).
         - `users` 행과 직접·간접 FK로 연결된 모든 자손을 같은 트랜잭션에서 물리 삭제한다. 기존 사용자 ID를 재사용하지 않는다.
         - 인증 정보·과거 해지 멤버십·종료 로그인·토큰 요청과 처리 이력을 삭제한다. 테넌트·서비스·OIDC 설정은 유지하며 접근 자격 변경의 완료 조건은 8장 규약을 따른다.
-        - 같은 이메일의 미활성 사전 등록을 명시적으로 삭제하며 개인정보를 추가 보관하지 않는다. `audit_logs`는 사용자 FK 없이 유지하고 기존 사용자 ID·탈퇴 시각·삭제 결과를 개인정보 값 없이 기록한다.
+        - 개인정보를 추가 보관하지 않는다. `audit_logs`는 사용자 FK 없이 유지하고 기존 사용자 ID·탈퇴 시각·삭제 결과를 개인정보 값 없이 기록한다.
         - 최초 요청 전에 클라이언트가 만든 Withdrawal-Receipt를 필수로 받는다. 원 사용자 ID·멱등 키·본문에 해시를 바인딩해 같은 탈퇴 트랜잭션에서 저장한다. 원 탈퇴 완료 확인·동기화·보안 기록은 사용자 FK 없이 보존하며 삭제된 사용자 프로필을 담은 기존 멱등 응답은 제거한다.
         - 로그인 종료 후 응답 유실·503이면 전용 completeWithdrawal 경로를 사용한다. 완료 키의 수명은 DB 커밋부터 24시간이다.
         - **[제안]** 어떤 테넌트의 마지막 관리자이면 `409 last_tenant_admin`이고, 해당 `tenant_ids`를 함께 반환한다(16장 2번).
@@ -1316,7 +1313,7 @@ paths:
       description: |
         이메일 소유를 확인한 사용자는 플랫폼 관리자 승인 없이 테넌트를 만들 수 있다(FR-TEN-001, D-05). 기본 토큰으로 호출한다.
         - 생성자는 첫 `admin`으로 자동 등록된다. 플랫폼 관리자 권한은 부여하지 않는다(FR-MEM-004).
-        - OIDC 소속 부여 방식은 사전 등록으로 시작한다(D-08).
+        - OIDC 소속 부여 방식은 수동 등록(`manual`)으로 시작한다(D-08).
         - OIDC로 생성된 계정은 Provider가 `email_verified = true`로 준 경우에만 이메일 확인 완료로 본다.
         - 코드가 이미 쓰이고 있으면 `409 already_exists`이다.
       x-requirements: [FR-TEN-001, FR-TEN-002, FR-TEN-003, FR-MEM-004, D-05, SC-03]
@@ -1576,24 +1573,21 @@ paths:
     post:
       operationId: addTenantMember
       tags: [Members]
-      summary: 멤버 사전 등록(추가)
+      summary: 기존 사용자 멤버 추가
       description: |
-        테넌트 `admin`이 이메일로 멤버를 사전 등록한다(FR-MEM-003, D-08 사전 등록·초대 방식). 응답 상태는 항상 `pre_registered`다.
-        계정 존재 여부를 관리자에게 드러내지 않기 위해서다.
-
-        다음 경우에 그 사용자의 멤버십이 `active`가 된다.
-        - 확인된 같은 이메일의 사용자가 이 테넌트로 처음 토큰을 요청할 때
-        - 이 테넌트의 OIDC로 로그인할 때. 이때는 Provider의 `email_verified = true`인 이메일만 매칭한다.
-
+        테넌트 `admin`이 이미 생성된 계정의 `user_id`로 멤버를 추가한다(FR-MEM-003, D-08). 응답 상태는 `active`이며 `joined_at`을 설정한다. 역할 생략 시 `member`다.
+        - 존재하지 않는 사용자는 `404 not_found`이다.
+        - 같은 사용자·테넌트에 `removed`가 아닌 멤버십이 있으면 `409 already_exists`이다(FR-MEM-005).
+        - 과거 해지 이력이 있으면 `409 conflict`이며, P1 재가입 신청·승인을 따른다(FR-MEM-008).
+        - 초기 `access_version = 1`과 멱등 결과·동기화 기록을 같은 트랜잭션에 저장한다. 8장 규약(`Idempotency-Key` 필수, `503 access_sync_pending`)에 따라 Valkey 반영까지 마쳐야 201이다. 재시도는 원 결과를 반환한다.
         초대장 발송·수락·만료(FR-MEM-006)는 P1이다.
-        같은 사용자·테넌트에 `removed`가 아닌 멤버십이 있으면 `409 already_exists`이다(FR-MEM-005).
-      x-requirements: [FR-MEM-001, FR-MEM-003, FR-MEM-004, FR-MEM-005, FR-WEB-004, D-08]
-      x-audit-event: membership.pre_registered
+      x-requirements: [FR-MEM-001, FR-MEM-003, FR-MEM-004, FR-MEM-005, FR-MEM-008, FR-APP-008-06, FR-APP-008-07, FR-APP-008-09, FR-WEB-004, D-08]
+      x-audit-event: membership.created
       parameters:
         - $ref: '#/components/parameters/TenantIdPath'
         - $ref: '#/components/parameters/RequestId'
         - $ref: '#/components/parameters/Activity'
-        - $ref: '#/components/parameters/IdempotencyKeyOptional'
+        - $ref: '#/components/parameters/IdempotencyKeyRequired'
       requestBody:
         required: true
         content:
@@ -1602,14 +1596,18 @@ paths:
               $ref: '#/components/schemas/MemberCreateRequest'
       responses:
         '201':
-          description: 사전 등록 완료
+          description: 멤버 추가 완료(DB 커밋과 Valkey 반영 완료)
           headers:
             ETag:
               $ref: '#/components/headers/ETag'
+            Idempotency-Replayed:
+              $ref: '#/components/headers/IdempotencyReplayed'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/MemberAdminView'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -1620,6 +1618,8 @@ paths:
           $ref: '#/components/responses/Conflict'
         '422':
           $ref: '#/components/responses/ValidationFailed'
+        '503':
+          $ref: '#/components/responses/SecurityChangeUnavailable'
 
   /api/v1/tenants/{tenant_id}/members/{membership_id}:
     get:
@@ -1713,7 +1713,6 @@ paths:
         멤버십을 `removed`(해지)로 바꾼다. 감사·재가입 판단을 위해 레코드는 남긴다.
         - 접근 자격 변경이므로 8장 규약을 따른다.
         - 성공 응답 이후 시작된 해당 사용자·테넌트의 신규 요청(Passport, SaaS)은 거부된다(FR-APP-008-01).
-        - 사전 등록 멤버십도 같은 방식으로 취소하고 사전 등록 이메일을 즉시 삭제한다.
         - **[제안]** 마지막 `active` 관리자는 해지할 수 없다(`409 last_tenant_admin`).
       x-requirements: [FR-MEM-003, FR-APP-008-01, FR-APP-008-02, FR-APP-008-05, FR-APP-008-06, FR-APP-008-07, FR-APP-008-09, FR-WEB-004, SC-05, FR-MEM-005-01, NFR-OPS-002-03]
       x-audit-event: membership.removed
@@ -2743,7 +2742,6 @@ paths:
       - FR-AUTH-009-02-03
       - FR-AUTH-009-02-04
       - D-03
-      - FR-MEM-005-01
       responses:
         '200':
           description: 처리 성공
@@ -4092,7 +4090,7 @@ paths:
       operationId: ssoAddTenantMember
       tags:
       - SSO
-      summary: 'SSO: 멤버 사전 등록(추가)'
+      summary: 'SSO: 기존 사용자 멤버 추가'
       description: 고정된 POST /api/v1/tenants/{tenant_id}/members(addTenantMember)의 브라우저용 계약이다. 원 API의 필드·권한·테넌트·오류
         계약을 그대로 적용하며 SSO가 서버에서 저장된 토큰을 붙인다. 브라우저 Authorization·Cookie를 그대로 전달하거나 임의 API로 중계하지 않는다. 변경 요청은 자기
         Origin·CSRF를 검증한다. 토큰 발급·갱신은 SSO 내부에서만 처리한다.
@@ -4107,20 +4105,28 @@ paths:
       - FR-MEM-003
       - FR-MEM-004
       - FR-MEM-005
+      - FR-MEM-008
+      - FR-APP-008-06
+      - FR-APP-008-07
+      - FR-APP-008-09
       - FR-WEB-004
       - D-08
       - FR-AUTH-009-02-01
       - FR-AUTH-009-02-04
       responses:
         '201':
-          description: 사전 등록 완료
+          description: 멤버 추가 완료(DB 커밋과 Valkey 반영 완료)
           headers:
             ETag:
               $ref: '#/components/headers/ETag'
+            Idempotency-Replayed:
+              $ref: '#/components/headers/IdempotencyReplayed'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/MemberAdminView'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/SsoUnauthorized'
         '403':
@@ -4131,11 +4137,13 @@ paths:
           $ref: '#/components/responses/Conflict'
         '422':
           $ref: '#/components/responses/ValidationFailed'
+        '503':
+          $ref: '#/components/responses/SecurityChangeUnavailable'
       parameters:
       - $ref: '#/components/parameters/TenantIdPath'
       - $ref: '#/components/parameters/RequestId'
       - $ref: '#/components/parameters/Activity'
-      - $ref: '#/components/parameters/IdempotencyKeyOptional'
+      - $ref: '#/components/parameters/IdempotencyKeyRequired'
       requestBody:
         required: true
         content:
@@ -6665,8 +6673,9 @@ components:
       description: 초기 연동·검증 대상(FR-OIDC-001)
     MemberProvisioning:
       type: string
-      enum: [pre_registration, auto]
-      description: OIDC 최초 인증 사용자의 소속 부여 방식. 기본 `pre_registration`(D-08)
+      enum: [manual, auto]
+      default: manual
+      description: OIDC 최초 인증 사용자의 소속 부여 방식. 기본 `manual`은 계정 생성 후 관리자가 `user_id`로 추가하며, `auto`는 이전 멤버십이 없는 사용자를 일반 구성원으로 자동 등록한다(D-08).
     OidcConfigurationWrite:
       type: object
       additionalProperties: false
@@ -6723,7 +6732,7 @@ components:
         - openid
         - email
         - profile
-        member_provisioning: pre_registration
+        member_provisioning: manual
         status: enabled
 
     OidcConfiguration:
@@ -6822,18 +6831,19 @@ components:
     # ---------- 멤버 ----------
     MembershipStatus:
       type: string
-      enum: [pre_registered, active, suspended, removed]
+      enum: [active, suspended, removed]
     MemberCreateRequest:
       type: object
       additionalProperties: false
-      required: [email]
+      required: [user_id]
       properties:
-        email:
-          $ref: '#/components/schemas/Email'
+        user_id:
+          $ref: '#/components/schemas/Uuid'
         role:
           $ref: '#/components/schemas/TenantRole'
+          default: member
       examples:
-        - email: lee@acme.example
+        - user_id: 0195f000-0000-7000-8000-000000000001
           role: member
     MemberUpdateRequest:
       type: object
@@ -6868,11 +6878,7 @@ components:
         membership_id:
           $ref: '#/components/schemas/Uuid'
         user_id:
-          type:
-          - string
-          - 'null'
-          format: uuid
-          description: '`pre_registered`면 `null`'
+          $ref: '#/components/schemas/Uuid'
         role:
           $ref: '#/components/schemas/TenantRole'
         status:
