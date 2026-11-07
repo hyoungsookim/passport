@@ -4,7 +4,7 @@ from alembic import context
 from sqlalchemy import create_engine, pool
 
 import passport.db.models  # noqa: F401  registers models on Base.metadata
-from passport.db.base import Base
+from passport.db.base import Base, render_item
 from passport.settings.config import database_url, load_settings
 
 # this is the Alembic Config object, which provides
@@ -58,7 +58,11 @@ def run_migrations_online() -> None:
     connectable = create_engine(url, poolclass=pool.NullPool)
 
     with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata,
+            render_item=render_item,
+        )
 
         with context.begin_transaction():
             context.run_migrations()

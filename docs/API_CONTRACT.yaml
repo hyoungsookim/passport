@@ -85,7 +85,7 @@ info:
     로그인 식별자는 Access Token의 `sid` 클레임이다. 로그인 하나는 다음을 기록한다.
 
     - 사용자, 인증 방식(`local`/`oidc`), 클라이언트 유형(`web`/`native`), 인증 시각
-    - OIDC인 경우 대상 `tenant_id`, `oidc_config_id`, 외부 `(issuer, subject)`, 설정 버전(D-06 즉시 무효화용)
+    - OIDC인 경우 대상 `tenant_id`, `config_id`, 외부 `(issuer, subject)`
     - 최대 유지 만료 시각과 마지막 사용자 활동 시각(FR-AUTH-009-03)
     - 최근 재인증 시각·방식
     - 클라이언트별 Refresh Token 계열(회전 이력, 재사용 탐지용)과 연결된 SSO 세션
@@ -128,7 +128,7 @@ info:
     | 본문 | `auth_time` | 로그인의 인증 시각 |
     | 본문 | `auth_method` | `local` 또는 `oidc` |
     | 본문 | `tenant_id` | 테넌트 범위 토큰에만 있음 |
-    | 본문 | `oidc_config_id` | `auth_method = oidc`일 때만 있음 |
+    | 본문 | `config_id` | `auth_method = oidc`일 때만 있음 |
 
     역할·멤버십은 토큰에 넣지 않는다. 멤버십 클레임만으로 현재 접근 자격을 보장하지 않기 때문이다
     (5장 보안 불변 조건). 외부 ID Token·외부 Access Token은 어떤 API에서도 인증 수단으로 받지 않는다
@@ -206,7 +206,7 @@ info:
 
     | 역할 | 범위 | 부여 |
     | --- | --- | --- |
-    | `member` | 소속 테넌트 | 관리자가 추가하거나 OIDC 자동 등록 |
+    | `member` | 소속 테넌트 | 대상 테넌트 OIDC 로그인 성공 시 자동 추가하거나 관리자가 기존 계정의 `user_id`로 추가 |
     | `admin` | 소속 테넌트 | 테넌트 생성자(FR-MEM-004) 또는 기존 관리자가 지정 |
     | `platform_admin` | Passport 전체 | 설치 시 CLI로 지정. P0에는 부여 API가 없다 |
 
@@ -362,7 +362,7 @@ info:
     **F-03 테넌트 OIDC 로그인 (SC-02)**
     1. 테넌트를 식별한다. 전용 링크면 경로의 `tenant_code`, 공통 화면이면 입력한 코드를 쓴다. `GET /sso/api/v1/auth/tenants/{tenant_code}/login-options`로 OIDC 가능 여부를 확인한다.
     2. `POST /sso/api/v1/auth/oidc/{tenant_code}/authorizations { "intent": "login" }`
-       - 서버는 로그인 트랜잭션(state, nonce, PKCE verifier)을 테넌트·설정·설정 버전·브라우저 비밀 쿠키 해시에 묶어 저장한다.
+       - 서버는 테넌트·OIDC 설정 행을 순서대로 잠그고, 활성 설정으로 로그인 트랜잭션(state, nonce, PKCE verifier)을 테넌트·설정·브라우저 비밀 쿠키 해시에 묶어 저장한다.
        - 트랜잭션별 HttpOnly 쿠키를 설정한다. 다른 탭에서 시작한 트랜잭션의 쿠키를 덮어쓰지 않는다.
        - 응답의 `authorization_url`로 브라우저를 이동한다.
     3. Provider가 Passport SSO의 `GET /sso/auth/oidc/callback/{tenant_id}`로 돌려보낸다. 서버는 다음을 검증한다(FR-OIDC-003/007/008/012).
@@ -371,15 +371,14 @@ info:
        - `iss` 응답 파라미터(RFC 9207)가 있으면 그 값이 설정 발급자와 같은지
        - PKCE 코드 교환
        - ID Token의 서명, `iss`, `aud = client_id`, `nonce`, `exp`, `iat`
-    4. `(issuer, subject)`로 사용자를 찾는다(FR-OIDC-004).
+    4. 외부 검증 후 테넌트·OIDC 설정 행을 순서대로 잠그고 미취소·미소비·미만료 트랜잭션과 활성 설정을 DB에서 다시 확인한 뒤, `(issuer, subject)`로 사용자를 찾는다(FR-OIDC-004). 이후 계정·신원·소속·로그인 변경까지 같은 DB 트랜잭션을 유지한다.
        - 없고 같은 이메일의 계정도 없으면 계정과 외부 신원을 자동 생성한다(D-08).
        - 같은 이메일의 기존 계정이 있으면 생성하지 않는다. `link_required`와 링크 티켓으로 돌려보낸다(F-04).
     5. 멤버십을 확인한다.
        - 활성 멤버십이 있으면 진행한다.
-       - 자동 등록 모드이고 이전 멤버십이 없으면 `member`로 등록한다.
-       - 수동 등록(`manual`) 모드이고 소속 이력이 없으면 멤버십을 생성하지 않고 계정·기본 로그인 생성만 진행한다. 관리자가 `user_id`로 추가하기 전까지 테넌트 토큰 발급·접근은 거부한다.
+       - 소속 이력이 없으면 일반 구성원(`role = member`)의 `active` 멤버십과 `joined_at`을 자동 생성한다. 계정·신원·소속·로그인은 같은 트랜잭션에서 처리하며, 테넌트 토큰 발급·접근 시 현재 계정·테넌트·소속·서비스 이용 자격을 검증한다.
        - 해지·비활성 멤버십은 자동 복구하지 않으며, 로그인을 만들지 않고 `membership_required`로 돌려보낸다(FR-MEM-008).
-    6. 로그인을 만들고 Passport SSO가 기본·Refresh Token을 서버에 저장한 후 세션 쿠키를 설정한다. 로그인에는 검증한 테넌트·OIDC 설정·신뢰 버전과 외부 종료 대상 매핑을 유지한다. 등록된 SSO 완료 경로로 이동하며 브라우저에 토큰은 전달하지 않는다.
+    6. 같은 DB 트랜잭션에서 로그인을 만들고 Passport SSO가 기본·Refresh Token을 서버에 저장한 후 커밋하고 세션 쿠키를 설정한다. 로그인에는 검증한 테넌트·OIDC 설정과 외부 종료 대상 매핑을 유지한다. 등록된 SSO 완료 경로로 이동하며 브라우저에 토큰은 전달하지 않는다.
     7. 포털은 `GET /sso/auth/session`으로 상태를 확인하고 `POST /sso/auth/context`로 테넌트를 선택한다.
 
     콜백 결과는 URL 조각(`#`)으로만 전달한다. 서버 로그와 Referer에 남지 않게 하기 위해서다.
@@ -508,7 +507,7 @@ info:
     ## 14. Phase 1(DB 모델)에 넘기는 모델 영향
 
     - `Tenant.code`(로그인 링크·코드 입력용 고유 슬러그, FR-OIDC-011)
-    - `TenantOIDCConfiguration`: `provider_type`, `display_name`, `member_provisioning`, `trust_version`, `last_validation`
+    - `TenantOIDCConfiguration`: `provider_type`, `display_name`, `last_validation`
     - `TenantMembership.user_id`는 필수 사용자 FK이며, 기존 계정 추가 시 `status = active`로 생성
     - `Application`: `audience`(= `code`), 서비스 자격 증명 해시
     - 로그인, 클라이언트별 Refresh Token 계열, SSO 세션·서버 측 토큰 저장 참조·무효화 연계, SSO 클라이언트·허용 redirect URI·일회용 인가 코드·PKCE, OIDC 로그인 트랜잭션, 링크 티켓, 이메일 확인 토큰, 멱등 키 저장소
@@ -1263,6 +1262,7 @@ paths:
       description: |
         OIDC 콜백에서 받은 링크 티켓의 외부 신원을 현재 사용자에 연결한다.
         - 기존 계정의 재인증(최근 5분, 로그인 직후 포함)과 `confirm: true`가 모두 필요하다(FR-OIDC-005, D-08).
+        - 테넌트·OIDC 설정 행을 순서대로 잠근 뒤 활성 설정과 미사용·미만료 티켓을 DB에서 다시 확인하고 소비한다. 신뢰 변경으로 삭제된 티켓은 `400 invalid_token_value`이며 신원을 연결하지 않는다.
         - 플랫폼 관리자 승인은 요구하지 않는다.
         - 외부 신원이 이미 다른 사용자에게 연결되어 있으면 `409 identity_already_linked`이고, 기존 연결을 유지한다.
         - 계정 병합과 신원 이전은 제공하지 않는다.
@@ -1303,7 +1303,7 @@ paths:
       description: |
         이메일 소유를 확인한 사용자는 플랫폼 관리자 승인 없이 테넌트를 만들 수 있다(FR-TEN-001, D-05). 기본 토큰으로 호출한다.
         - 생성자는 첫 `admin`으로 자동 등록된다. 플랫폼 관리자 권한은 부여하지 않는다(FR-MEM-004).
-        - OIDC 소속 부여 방식은 수동 등록(`manual`)으로 시작한다(D-08).
+        - 대상 테넌트의 OIDC 로그인에 성공하고 소속 이력이 없는 사용자는 일반 구성원으로 자동 추가된다. 관리자도 기존 계정의 `user_id`로 구성원을 추가할 수 있다(D-08).
         - OIDC로 생성된 계정은 Provider가 `email_verified = true`로 준 경우에만 이메일 확인 완료로 본다.
         - 코드가 이미 쓰이고 있으면 `409 already_exists`이다.
       x-requirements: [FR-TEN-001, FR-TEN-002, FR-TEN-003, FR-MEM-004, D-05, SC-03]
@@ -1439,9 +1439,10 @@ paths:
           발급자가 다르거나 조회에 실패하면 `422 validation_failed`이다(FR-OIDC-006).
         - **신뢰 변경**
           - 대상: `issuer`, `client_id`, `client_secret` 변경과 `enabled → disabled` 전환
-          - 처리: `trust_version`을 올린다. 이 설정에 근거한 이 테넌트의 OIDC 로그인과 Passport Access·Refresh Token을 즉시 무효화한다(D-06).
+          - 처리: 이 설정에 근거한 이 테넌트의 OIDC 로그인을 종료하여 Passport Access·Refresh Token을 즉시 무효화하고, 미완료 OIDC 트랜잭션·미사용 연결 티켓을 삭제한다. 설정 갱신과 함께 같은 DB 트랜잭션에서 처리한다(D-06).
+          - 인증 시작·콜백 결과 반영·연결 티켓 소비는 테넌트 행 → 설정 행을 `FOR SHARE`로 잠그며, 설정 변경은 같은 순서로 `FOR UPDATE`로 잠근다. 인증 결과·티켓 소비는 잠금 후 현재 행을 다시 조회하여 취소되지 않았는지 확인한다. 외부 검증 통신은 결과 반영용 잠금 밖에서 수행한다.
           - 응답의 `trust_changed`가 `true`가 된다.
-          - 그 외 필드(`display_name`, `member_provisioning`) 변경은 기존 로그인을 유지한다.
+          - 표시명(`display_name`) 변경은 기존 로그인·미완료 인증 흐름을 유지한다.
           - Local 로그인과 다른 테넌트의 로그인은 영향을 받지 않는다.
       x-requirements: [FR-OIDC-001, FR-OIDC-006, FR-OIDC-010, FR-OIDC-014, FR-TEN-009, FR-WEB-010, D-06, D-08, NFR-OPS-002-03, FR-OIDC-017-01]
       x-audit-event: tenant.oidc_configuration_changed
@@ -2713,7 +2714,7 @@ paths:
         1. `state`로 미사용·미만료 트랜잭션을 찾고 최초 브라우저의 트랜잭션별 쿠키 해시를 대조한다.
            쿠키 누락·불일치는 소비 전에 거부한다. 트랜잭션의 `tenant_id`가 경로와 같아야 한다(FR-OIDC-007/012).
         2. `iss` 파라미터(RFC 9207)가 있으면 설정의 발급자와 같아야 한다.
-        3. 트랜잭션 시점의 설정 버전이 현재와 같고 설정이 `enabled`여야 한다(D-06).
+        3. 설정이 `enabled`여야 한다. 외부 검증 후 결과를 저장하기 전에 테넌트·설정 행을 순서대로 잠그고 트랜잭션을 DB에서 다시 조회하여 미취소·미소비·미만료와 현재 설정 활성 상태를 재검증한다. 신뢰 변경으로 취소되었으면 인증 결과를 반영하지 않는다(D-06).
         4. PKCE verifier로 코드를 교환한다. ID Token의 서명(테넌트 설정의 JWKS), `iss`, `aud = client_id`, `nonce`, `exp`, `iat`를 검증한다(FR-OIDC-003).
         5. 외부 Access Token을 쓰는 경우 공통 JWT 검증 엔진에서 테넌트 설정의 용도·audience 규칙으로 검증한다. JWT만 지원한다(FR-OIDC-009-01).
         6. 지원 계약에서 요구하는 외부 세션·철회 대상 식별자를 검증하고 로그인 매핑에 저장한다. 필수 식별자 누락은 invalid_response다(FR-OIDC-017-01).
@@ -2759,7 +2760,7 @@ paths:
       - D-03
       - FR-MEM-005-01
       - FR-OIDC-017-01
-      x-audit-event: auth.oidc_login_succeeded / auth.oidc_login_failed / user.created_from_oidc / membership.auto_provisioned
+      x-audit-event: auth.oidc_login_succeeded / auth.oidc_login_failed / user.created_from_oidc / membership.created
       parameters:
       - $ref: '#/components/parameters/TenantIdPath'
       - name: state
@@ -3251,7 +3252,7 @@ paths:
       description: |
         Passport SSO가 직접 처리하는 OIDC 시작 경로다. 대응하는 공개 /api/v1 시작 경로는 두지 않는다.
         - 자기 Origin·CSRF 헤더를 검증하고 트랜잭션별 256비트 비밀 쿠키를 생성한다.
-        - state·nonce·PKCE와 테넌트·설정·신뢰 버전·의도·return_to·쿠키 해시를 서버에 함께 저장한다.
+        - 테넌트·설정 행을 순서대로 잠그고 활성 설정을 확인한 뒤 state·nonce·PKCE와 테넌트·설정·의도·return_to·쿠키 해시를 서버에 함께 저장한다.
         - intent=login은 로그인 세션이 필요 없다. link/reauth는 유효한 SSO 세션을 트랜잭션에 묶는다.
         - return_to는 등록된 포털 완료 URI와 정확히 일치해야 한다. 외부 상태 확인 불가는 503이다.
         - 비밀 쿠키는 JSON·URL에 반환하지 않으며 콜백에서 소비 전에 대조한다. 속성은 2장을 따른다.
@@ -5597,7 +5598,7 @@ components:
         auth_context:
           sid: 0193a3d0-1111-7aaa-8bbb-0c0d0e0f1011
           auth_method: oidc
-          oidc_config_id: 0193a3c9-5555-7aaa-8bbb-0c0d0e0f1011
+          config_id: 0193a3c9-5555-7aaa-8bbb-0c0d0e0f1011
           external_issuer: https://idp.acme.example/realms/acme
           auth_time: '2026-10-31T09:00:00Z'
           client_id: papyrus
@@ -5620,7 +5621,7 @@ components:
         auth_context:
           sid: 0193a3d0-1111-7aaa-8bbb-0c0d0e0f1011
           auth_method: local
-          oidc_config_id: null
+          config_id: null
           external_issuer: null
           auth_time: '2026-10-31T09:00:00Z'
           client_id: papyrus
@@ -6257,7 +6258,7 @@ components:
           type: [string, 'null']
           format: uuid
           description: '`oidc`가 연결된 테넌트 OIDC 설정의 테넌트'
-        oidc_config_id:
+        config_id:
           type: [string, 'null']
           format: uuid
         issuer:
@@ -6371,11 +6372,6 @@ components:
       type: string
       enum: [keycloak, auth0]
       description: 초기 연동·검증 대상(FR-OIDC-001)
-    MemberProvisioning:
-      type: string
-      enum: [manual, auto]
-      default: manual
-      description: OIDC 최초 인증 사용자의 소속 부여 방식. 기본 `manual`은 계정 생성 후 관리자가 `user_id`로 추가하며, `auto`는 이전 멤버십이 없는 사용자를 일반 구성원으로 자동 등록한다(D-08).
     OidcConfigurationWrite:
       type: object
       additionalProperties: false
@@ -6384,7 +6380,6 @@ components:
       - display_name
       - issuer
       - client_id
-      - member_provisioning
       - status
       properties:
         provider_type:
@@ -6415,8 +6410,6 @@ components:
             type: string
             pattern: ^[\x21\x23-\x5B\x5D-\x7E]+$
           description: '`openid` 필수. 기본 `[openid, email, profile]`'
-        member_provisioning:
-          $ref: '#/components/schemas/MemberProvisioning'
         status:
           type: string
           enum:
@@ -6432,13 +6425,12 @@ components:
         - openid
         - email
         - profile
-        member_provisioning: manual
         status: enabled
 
     OidcConfiguration:
       type: object
       required:
-      - oidc_config_id
+      - config_id
       - tenant_id
       - provider_type
       - display_name
@@ -6446,15 +6438,13 @@ components:
       - client_id
       - client_secret_set
       - scopes
-      - member_provisioning
       - status
       - redirect_uri
-      - trust_version
       - last_validation
       - created_at
       - updated_at
       properties:
-        oidc_config_id:
+        config_id:
           $ref: '#/components/schemas/Uuid'
         tenant_id:
           $ref: '#/components/schemas/Uuid'
@@ -6473,8 +6463,6 @@ components:
           type: array
           items:
             type: string
-        member_provisioning:
-          $ref: '#/components/schemas/MemberProvisioning'
         status:
           type: string
           enum:
@@ -6485,10 +6473,6 @@ components:
           format: uri
           readOnly: true
           description: IdP 클라이언트에 등록할 Redirect URI(`/sso/auth/oidc/callback/{tenant_id}`)
-        trust_version:
-          type: integer
-          minimum: 1
-          description: 신뢰 변경마다 증가. 이 값이 바뀌면 기존 OIDC 로그인 무효
         last_validation:
           type: object
           required:
@@ -6900,7 +6884,7 @@ components:
       required:
       - sid
       - auth_method
-      - oidc_config_id
+      - config_id
       - external_issuer
       - auth_time
       - client_id
@@ -6913,7 +6897,7 @@ components:
           enum:
           - local
           - oidc
-        oidc_config_id:
+        config_id:
           type:
           - string
           - 'null'

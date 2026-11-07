@@ -1,12 +1,23 @@
 import pytest
 from sqlalchemy.dialects import postgresql
-from sqlalchemy.schema import CreateTable
+from sqlalchemy.schema import CreateIndex, CreateTable
 
 from passport.db.base import Base, IntEnumType
 from passport.db.models import (
     EmailVerificationToken,
     Identity,
+    MembershipRemovalReason,
+    MembershipStatus,
+    OidcConfigurationStatus,
+    OidcProviderType,
+    OidcValidationError,
+    OidcValidationStatus,
     PasswordAlgorithm,
+    Tenant,
+    TenantMembership,
+    TenantOidcConfiguration,
+    TenantRole,
+    TenantStatus,
     User,
     UserSecurity,
     UserStatus,
@@ -16,7 +27,13 @@ DIALECT = postgresql.dialect()
 
 
 def ddl(model):
-    return " ".join(str(CreateTable(model.__table__).compile(dialect=DIALECT)).split())
+    table = Base.metadata.tables[model.__tablename__]
+    statements = [CreateTable(table)] + [
+        CreateIndex(index) for index in sorted(table.indexes, key=lambda i: i.name)
+    ]
+    return " ; ".join(
+        " ".join(str(s.compile(dialect=DIALECT)).split()) for s in statements
+    )
 
 
 @pytest.mark.parametrize(
@@ -27,6 +44,23 @@ def ddl(model):
             {"PENDING_VERIFICATION": 1, "ACTIVE": 2, "SUSPENDED": 3, "DEACTIVATED": 4},
         ),
         (PasswordAlgorithm, {"ARGON2ID": 1}),
+        (TenantStatus, {"ACTIVE": 1, "SUSPENDED": 2, "DEACTIVATED": 3}),
+        (OidcProviderType, {"KEYCLOAK": 1, "AUTH0": 2}),
+        (OidcConfigurationStatus, {"ENABLED": 1, "DISABLED": 2}),
+        (OidcValidationStatus, {"OK": 1, "FAILED": 2}),
+        (
+            OidcValidationError,
+            {
+                "DISCOVERY_UNREACHABLE": 1,
+                "ISSUER_MISMATCH": 2,
+                "JWKS_UNREACHABLE": 3,
+                "INVALID_CLIENT": 4,
+                "UNSUPPORTED_LIFECYCLE_BINDING": 5,
+            },
+        ),
+        (TenantRole, {"ADMIN": 1, "MEMBER": 2}),
+        (MembershipStatus, {"ACTIVE": 2, "SUSPENDED": 3, "REMOVED": 4}),
+        (MembershipRemovalReason, {"ADMIN_REMOVED": 1}),
     ],
 )
 def test_enum_keys_match_db_model(enum, keys):
@@ -107,24 +141,95 @@ def test_email_verification_tokens_ddl():
     )
 
 
-def test_identities_schema():
-    # Full DDL needs the 4.2 tenant tables, so check the 4.1 parts directly.
-    table = Base.metadata.tables[Identity.__tablename__]
+def test_identities_ddl():
+    assert ddl(Identity) == (
+        "CREATE TABLE identities ( "
+        "identity_id UUID NOT NULL, "
+        "user_id UUID NOT NULL, "
+        "issuer VARCHAR(2048) NOT NULL, "
+        "subject VARCHAR(255) NOT NULL, "
+        "tenant_id UUID NOT NULL, "
+        "config_id UUID NOT NULL, "
+        "linked_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, "
+        "last_used_at TIMESTAMP WITH TIME ZONE, "
+        "CONSTRAINT pk_identities PRIMARY KEY (identity_id), "
+        "CONSTRAINT uq_identities_issuer_subject UNIQUE (issuer, subject), "
+        "CONSTRAINT fk_identities_user_id_users FOREIGN KEY(user_id) "
+        "REFERENCES users (user_id) ON DELETE CASCADE, "
+        "CONSTRAINT fk_identities_tenant_id_tenants FOREIGN KEY(tenant_id) "
+        "REFERENCES tenants (tenant_id) ON DELETE RESTRICT, "
+        "CONSTRAINT fk_identities_config_id_tenant_oidc_configurations "
+        "FOREIGN KEY(config_id) REFERENCES tenant_oidc_configurations (config_id) "
+        "ON DELETE RESTRICT ) ; "
+        "CREATE INDEX ix_identities_user_id ON identities (user_id)"
+    )
 
-    assert {(c.name, c.nullable) for c in table.c} == {
-        ("id", False),
-        ("user_id", False),
-        ("issuer", False),
-        ("subject", False),
-        ("tenant_id", False),
-        ("oidc_config_id", False),
-        ("linked_at", False),
-        ("last_used_at", True),
-    }
-    assert {(fk.target_fullname, fk.ondelete) for fk in table.foreign_keys} == {
-        ("users.user_id", "CASCADE"),
-        ("tenants.id", "RESTRICT"),
-        ("tenant_oidc_configurations.id", "RESTRICT"),
-    }
-    assert "uq_identities_issuer_subject" in {c.name for c in table.constraints}
-    assert {i.name for i in table.indexes} == {"ix_identities_user_id"}
+
+def test_tenants_ddl():
+    assert ddl(Tenant) == (
+        "CREATE TABLE tenants ( "
+        "tenant_id UUID NOT NULL, "
+        "tenant_code VARCHAR(32) NOT NULL, "
+        "is_system BOOLEAN DEFAULT false NOT NULL, "
+        "tenant_name VARCHAR(100) NOT NULL, "
+        "tenant_status SMALLINT DEFAULT 1 NOT NULL, "
+        "tenant_description VARCHAR(500), "
+        "created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, "
+        "updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, "
+        "created_by UUID NOT NULL, "
+        "updated_by UUID NOT NULL, "
+        "external_id VARCHAR(50), "
+        "external_source VARCHAR(50), "
+        "CONSTRAINT pk_tenants PRIMARY KEY (tenant_id), "
+        "CONSTRAINT uq_tenants_tenant_code UNIQUE (tenant_code) )"
+    )
+
+
+def test_tenant_oidc_configurations_ddl():
+    assert ddl(TenantOidcConfiguration) == (
+        "CREATE TABLE tenant_oidc_configurations ( "
+        "config_id UUID NOT NULL, "
+        "tenant_id UUID NOT NULL, "
+        "provider_type SMALLINT NOT NULL, "
+        "display_name VARCHAR(100) NOT NULL, "
+        "issuer VARCHAR(2048) NOT NULL, "
+        "client_id VARCHAR(255) NOT NULL, "
+        "client_secret_ciphertext BYTEA NOT NULL, "
+        "scopes TEXT[] DEFAULT '{openid,email,profile}' NOT NULL, "
+        "config_status SMALLINT NOT NULL, "
+        "last_validation_status SMALLINT NOT NULL, "
+        "last_validation_checked_at TIMESTAMP WITH TIME ZONE NOT NULL, "
+        "last_validation_error_code SMALLINT, "
+        "created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, "
+        "updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, "
+        "CONSTRAINT pk_tenant_oidc_configurations PRIMARY KEY (config_id), "
+        "CONSTRAINT uq_tenant_oidc_configurations_tenant_id UNIQUE (tenant_id), "
+        "CONSTRAINT fk_tenant_oidc_configurations_tenant_id_tenants "
+        "FOREIGN KEY(tenant_id) REFERENCES tenants (tenant_id) ON DELETE RESTRICT )"
+    )
+
+
+def test_tenant_memberships_ddl():
+    assert ddl(TenantMembership) == (
+        "CREATE TABLE tenant_memberships ( "
+        "membership_id UUID NOT NULL, "
+        "tenant_id UUID NOT NULL, "
+        "user_id UUID NOT NULL, "
+        "role_in_tenant SMALLINT DEFAULT 2 NOT NULL, "
+        "membership_status SMALLINT DEFAULT 2 NOT NULL, "
+        "joined_at TIMESTAMP WITH TIME ZONE, "
+        "removed_at TIMESTAMP WITH TIME ZONE, "
+        "removed_reason SMALLINT, "
+        "created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, "
+        "updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, "
+        "CONSTRAINT pk_tenant_memberships PRIMARY KEY (membership_id), "
+        "CONSTRAINT fk_tenant_memberships_tenant_id_tenants FOREIGN KEY(tenant_id) "
+        "REFERENCES tenants (tenant_id) ON DELETE RESTRICT, "
+        "CONSTRAINT fk_tenant_memberships_user_id_users FOREIGN KEY(user_id) "
+        "REFERENCES users (user_id) ON DELETE CASCADE ) ; "
+        "CREATE INDEX ix_tenant_memberships_tenant_id_membership_status "
+        "ON tenant_memberships (tenant_id, membership_status) ; "
+        "CREATE INDEX ix_tenant_memberships_user_id ON tenant_memberships (user_id) ; "
+        "CREATE UNIQUE INDEX uq_tenant_memberships_tenant_user "
+        "ON tenant_memberships (tenant_id, user_id) WHERE membership_status <> 4"
+    )

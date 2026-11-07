@@ -25,6 +25,8 @@ class PasswordAlgorithm(IntEnum):
 
 class User(Base):
     __tablename__ = "users"
+    # eager_defaults: RETURNING the onupdate timestamp; async sessions cannot lazy-load it.
+    __mapper_args__: Mapping[str, Any] = {"eager_defaults": True}
 
     user_id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid7)
     user_status: Mapped[UserStatus] = mapped_column(
@@ -45,9 +47,6 @@ class User(Base):
     )
     external_id: Mapped[str | None] = mapped_column(String(50))
     external_source: Mapped[str | None] = mapped_column(String(50))
-
-    # eager_defaults: RETURNING the onupdate timestamp; async sessions cannot lazy-load it.
-    __mapper_args__: Mapping[str, Any] = {"eager_defaults": True}
 
 
 class UserSecurity(Base):
@@ -78,18 +77,17 @@ class Identity(Base):
         UniqueConstraint("issuer", "subject", name="uq_identities_issuer_subject"),
     )
 
-    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid7)
+    identity_id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid7)
     user_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("users.user_id", ondelete="CASCADE"), index=True
     )
     issuer: Mapped[str] = mapped_column(String(2048))
     subject: Mapped[str] = mapped_column(String(255))
-    # tenants / tenant_oidc_configurations are defined with DB_MODEL.md 4.2.
     tenant_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("tenants.id", ondelete="RESTRICT")
+        ForeignKey("tenants.tenant_id", ondelete="RESTRICT")
     )
-    oidc_config_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("tenant_oidc_configurations.id", ondelete="RESTRICT")
+    config_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tenant_oidc_configurations.config_id", ondelete="RESTRICT")
     )
     linked_at: Mapped[datetime] = mapped_column(server_default=func.now())
     last_used_at: Mapped[datetime | None]

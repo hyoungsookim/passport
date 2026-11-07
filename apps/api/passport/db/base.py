@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from enum import IntEnum
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 from sqlalchemy import DateTime, MetaData, SmallInteger, TypeDecorator
 from sqlalchemy.engine import Dialect
@@ -16,10 +16,10 @@ class Base(DeclarativeBase):
     # Fixed constraint names so Alembic can alter and drop them reliably.
     metadata = MetaData(
         naming_convention={
-            "ix": "ix_%(table_name)s_%(column_0_name)",
-            "uq": "uq_%(table_name)s_%(column_0_name)",
+            "ix": "ix_%(table_name)s_%(column_0_name)s",
+            "uq": "uq_%(table_name)s_%(column_0_name)s",
             "ck": "ck_%(table_name)s_%(constraint_name)s",
-            "fk": "fk_%(table_name)s_%(column_0_name)_%(referred_table_name)s",
+            "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
             "pk": "pk_%(table_name)s",
         }
     )
@@ -40,3 +40,11 @@ class IntEnumType[E: IntEnum](TypeDecorator[E]):
 
     def process_result_value(self, value: int | None, dialect: Dialect) -> E | None:
         return None if value is None else self.enum_class(value)
+
+
+def render_item(
+    type_: str, obj: object, autogen_context: object
+) -> str | Literal[False]:
+    """Alembic autogenerate hook: migrations store IntEnumType as plain smallint."""
+    is_enum = type_ == "type" and isinstance(obj, IntEnumType)
+    return "sa.SmallInteger()" if is_enum else False
