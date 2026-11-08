@@ -24,7 +24,7 @@ info:
         테넌트에서 TenantApplication을 활성화·중단할 수 있다.
 
     **2026-11-02 확정 보완**: 외부 로그아웃·철회의 정확한 대상 매핑,
-    독립 외부 보안 기록 영속화 후 완료 응답, 탈퇴 확인 키 24시간을 적용한다.
+    독립 외부 보안 기록 영속화 후 완료 응답을 적용한다.
     OIDC 시작·콜백은 최초 브라우저에 바인딩하며, 접근 자격은 매 요청 DB의 현재 상태로 검증한다.
 
     **인증 정책 책임:** OTP 등록·검증·복구와 MFA 정책은 OIDC Provider가 관리한다. Passport는 별도 MFA 판정·저장·전달과 `acr`·`amr` 인정 규칙을 제공하지 않는다. OIDC 토큰의 기본 검증과 민감 작업 재인증은 유지하며 Local 로그인에는 Provider의 OTP 정책이 적용되지 않는다.
@@ -50,7 +50,6 @@ info:
     | 웹 SSO | 리소스 API에 사용자 Bearer 토큰, 토큰 발급·갱신에 SSO 클라이언트 인증 | 토큰은 서버에서만 보관·사용 |
     | 네이티브 앱(지원 시) | `Authorization: Bearer <access_token>` + Refresh Token은 응답 본문 | FR-AUTH-009-02-02. P0의 네이티브 로그인은 Local만 지원 |
     | 연동 SaaS 백엔드 | HTTP Basic(`client_id:client_secret`) | `/api/v1/service/*`만 호출 가능(FR-APP-007) |
-    | 탈퇴 완료 확인 | 전용 `Withdrawal-Receipt` 헤더 | 해당 커밋된 탈퇴 요청의 처리 재개·완료 확인만 허용, 24시간 |
     | 공개 | 없음 | 가입, 이메일 확인, 로그인 시작, JWKS, 헬스 체크 |
 
     **SSO 세션 쿠키 [제안]**: Passport 포털의 이름은 `__Host-passport_session`, 속성은
@@ -73,9 +72,6 @@ info:
     OIDC 시작은 SSO가 직접 처리하고 공개 `/api/v1` 시작 경로를 두지 않는다. 트랜잭션별
     `__Host-passport_oidc_<id>` 쿠키는 256비트 난수이며 `HttpOnly; Secure; SameSite=Lax; Path=/`,
     `Domain` 없음, 트랜잭션과 동일 만료다. 콜백은 소비 전에 쿠키 해시를 대조하며 누락·불일치는 거부한다.
-    탈퇴 확인 키는 Access/Refresh Token과 별개의 제한된 자격 증명으로, 클라이언트가 첫 요청 전에
-    CSPRNG로 32바이트를 생성해 base64url(패딩 없음)로 보관한다. 웹은 자기 Origin의 sessionStorage에만
-    완료 또는 최대 24시간까지 보관하고 완료·만료 시 지운다. 서버에는 해시만 저장하며 로그·응답에 노출하지 않는다.
 
     ## 3. 로그인과 토큰 모델
 
@@ -91,7 +87,7 @@ info:
     - 클라이언트별 Refresh Token 계열(회전 이력, 재사용 탐지용)과 연결된 SSO 세션
     - SSO 세션의 사용자·로그인·테넌트·인증 컨텍스트와 서버 측 토큰 저장 참조
 
-    SSO의 세션 ID는 JWT `sid`와 별개의 비밀 자격 증명이다. `LoginInfo.login_id`는 공개해도
+    SSO의 세션 ID는 JWT `sid`와 별개의 비밀 자격 증명이다. `LoginInfo.user_session_id`는 공개해도
     인증할 수 없는 로그인 식별자이며 세션 쿠키 대신 사용할 수 없다. 세션 생성·SSO 연결로
     원래 인증 시각·만료·활동·테넌트 범위를 확대하지 않는다.
 
@@ -262,7 +258,7 @@ info:
     - **접근 자격 변경 API**(FR-APP-008): 멤버십 추가·상태 변경·제거, 테넌트 상태 변경, TenantApplication 변경, 계정 탈퇴.
       1. 원 멱등 행과 관련 데이터 행을 잠그고 검증한다. 9.4절 대상이면 외부 변경 의도 영속화를 확인한 뒤 상태 변경·멱등 결과·연결 원장을 같은 DB 트랜잭션에서 커밋한다. 탈퇴는 사용자 및 모든 FK 자손을 삭제한다.
       2. DB 커밋과 대상 작업의 외부 커밋 확인이 끝난 뒤 성공을 응답한다. 이후 시작된 요청은 현재 DB 상태로 검증하여 변경된 접근 자격을 적용한다(FR-APP-008-01/06/07).
-      3. 외부 커밋 확인 실패는 `503 security_record_pending`과 `db_committed: true`로 구분한다. 같은 `Idempotency-Key`로 재시도하면 상태를 다시 바꾸지 않고 원 작업의 외부 확인을 마친 뒤 저장된 결과를 반환한다(FR-APP-008-09).
+      3. 외부 커밋 확인 실패는 `503 security_record_pending`과 `db_committed: true`로 구분한다. 같은 `Idempotency-Key`로 재시도하면 상태를 다시 바꾸지 않고 원 작업의 외부 확인을 마친 뒤 저장된 결과를 반환한다(FR-APP-008-09). 탈퇴 DB 커밋 후에는 기존 인증이 종료되므로 미완료 외부 확인은 서버가 재처리한다.
     - **외부 보안 기록**(NFR-OPS-002-03): 탈퇴·차단·해지·접근 중지·개인정보 및 인증 수단 삭제와 대응하는
       재활성화·재부여는 `DB_MODEL.md` 9.4절을 따른다. 변경 의도를 독립 외부 저장소에 먼저 영속화하고,
       DB 상태·연결 원장을 같은 트랜잭션에서 커밋한 뒤 외부 커밋 확인을 마쳐야 성공이다.
@@ -413,15 +409,13 @@ info:
 
     **F-10 탈퇴 (SC-06, FR-USER-005)**
     1. 재인증한다.
-    2. 첫 요청 전에 256비트 확인 키를 생성·보관하고 `POST /sso/api/v1/users/me/withdrawal { confirm: true }`를
-       `Idempotency-Key`·`Withdrawal-Receipt`와 함께 호출한다.
+    2. `POST /sso/api/v1/users/me/withdrawal { confirm: true }`를 `Idempotency-Key`와 함께 호출한다.
        - 즉시 완료되며 유예와 취소는 없다.
        - 사용자와 모든 FK 자손을 같은 트랜잭션에서 물리 삭제한다. 과거 해지 멤버십·종료 로그인·토큰도 삭제하며 기존 토큰은 거부한다. 응답과 함께 SSO 세션 쿠키가 지워진다.
-       - 개인정보를 추가 보관하지 않는다. 감사로그와 사용자 FK 없는 원 탈퇴 완료 확인·복원용 기록은 개인정보 값 없이 유지한다.
-    3. 응답 유실·503 또는 세션 무효화로 원 API가 401이면 `/sso/auth/withdrawals/complete`에 같은 확인 키를 보낸다.
-       - 유효한 키로 커밋된 원 요청의 외부 기록 확인을 재개하고, 완료 시 204를 반환한다.
-       - 미커밋 요청·불명·만료 키는 동일한 404다. 키는 첫 커밋부터 24시간만 유효하고 연장하지 않는다.
-       - 브라우저 완료 경로는 세션 쿠키 대신 확인 키와 자기 Origin·CSRF 헤더를 검증한다. 개인정보·계정 상태 본문은 반환하지 않는다.
+       - 개인정보를 추가 보관하지 않는다. 감사로그와 사용자 FK 없는 복원용 운영 기록은 개인정보 값 없이 유지한다.
+    3. `503 security_record_pending`의 `db_committed`가 false이면 같은 멱등 키로 재시도한다.
+       true이면 삭제는 유지하며 미완료 외부 확인은 서버가 재처리한다. SSO는 세션과 쿠키를 정리한다.
+       DB 커밋 후 응답이 유실되어도 기존 인증은 종료되며, 해당 인증으로 원 API를 재호출하면 401이다.
 
     ## 12. 요구사항 대응표
 
@@ -447,7 +441,7 @@ info:
     | FR-USER-002-02 | `listTenantMembers`, `getTenantMember`, `adminSearchUsers`, `verifyAccess`, `listServiceTenantMembers`, `getServiceTenantMember` |
     | FR-USER-003, D-04 | `signupLocal`, `confirmEmailVerification`, `resendEmailVerification` |
     | FR-USER-004 | `getMe`, `adminGetUser`, `updateUserStatus` |
-    | FR-USER-005, 005-01, 005-02 | `withdrawMe`, `completeWithdrawal`, `ssoCompleteWithdrawal` |
+    | FR-USER-005, 005-01 | `withdrawMe` |
     | FR-USER-007 | `listMyIdentities`(전역 계정의 인증 수단 조회, 인증 비밀값 제외) |
     | FR-TEN-001, 002, 003, D-05 | `createTenant`, `getTenant`, `updateTenant`, `adminListTenants`, `adminGetTenant` |
     | FR-TEN-004 | `adminUpdateTenantStatus` |
@@ -469,7 +463,7 @@ info:
     | NFR-SEC-004 | 4장 경계, 모든 테넌트 범위 API |
     | NFR-SEC-007 | 각 operation의 `x-audit-event` |
     | NFR-OPS-001 | `X-Request-ID`, `getLiveness`, `getReadiness` |
-    | NFR-OPS-002-03 | 8장 외부 보안 기록 대상 변경 API, `completeWithdrawal`, `ssoCompleteWithdrawal`, 복원 절차 |
+    | NFR-OPS-002-03 | 8장 외부 보안 기록 대상 변경 API, 서버의 미완료 외부 확인 재처리, 복원 절차 |
 
     | 시나리오 | 흐름 |
     | --- | --- |
@@ -496,9 +490,8 @@ info:
     - `TenantMembership.user_id`는 필수 사용자 FK이며, 기존 계정 추가 시 `status = active`로 생성
     - `Application`: `audience`(= `code`), 서비스 자격 증명 해시
     - 로그인, 클라이언트별 Refresh Token 계열, SSO 세션·서버 측 토큰 저장 참조·무효화 연계, SSO 클라이언트·허용 redirect URI·일회용 인가 코드·PKCE, OIDC 로그인 트랜잭션, 링크 티켓, 이메일 확인 토큰, 멱등 키 저장소
-    - OIDC 트랜잭션의 브라우저 바인딩 해시, 검증된 외부 세션·토큰별 `oidc_login_bindings`
-    - 사용자 행·직접/간접 FK 자손의 `ON DELETE CASCADE`, 감사로그 보존, 사용자 삭제 후에도 동작하는 완료 확인·외부 보안 기록
-    - 원 탈퇴 멱등 키에 연결한 `withdrawal_receipts`(해시·24시간 만료, 사용자 FK 없음)
+    - OIDC 트랜잭션의 브라우저 바인딩 해시, 검증된 외부 세션·토큰별 `session_bindings`
+    - 사용자 행·직접/간접 FK 자손의 `ON DELETE CASCADE`, 감사로그 보존, 사용자 삭제 후에도 서버에서 재처리할 수 있는 외부 보안 기록
     - 외부 보안 저널에 연결한 `security_change_events`와 백업의 저널 기준점
 
     ## 15. 상태 값
@@ -523,7 +516,7 @@ info:
     7. 테넌트 코드 형식(`^[a-z0-9](?:[a-z0-9-]{1,30}[a-z0-9])$`)과 생성 후 변경 불가.
 
     ## 17. SSO 경계의 추가 검증
-    - SSO 세션 쿠키의 값은 비밀 식별자이며 LoginInfo.login_id로 대체할 수 없다.
+    - SSO 세션 쿠키의 값은 비밀 식별자이며 LoginInfo.user_session_id로 대체할 수 없다.
     - 일반 브라우저 응답에는 Access/Refresh Token·SSO가 사용하는 client 비밀값을 포함하지 않는다.
     권한 있는 관리자가 서비스 자격 증명을 생성·교체할 때 새 비밀값을 한 번 표시하는 기존 관리 계약은 별도로 적용한다.
     - 일반 리소스 API의 Set-Cookie·WWW-Authenticate를 브라우저로 그대로 전달하지 않는다.
@@ -1059,77 +1052,6 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
-  /api/v1/auth/withdrawals/complete:
-    post:
-      operationId: completeWithdrawal
-      tags: [Auth]
-      summary: 커밋된 탈퇴 요청의 완료 처리 재개
-      description: |
-        Withdrawal-Receipt 해시로 찾은 원 탈퇴 요청의 외부 커밋 기록을 재시도하고 완료 시 204를 반환한다.
-        로그인 쿠키·Bearer는 필요 없고 수용하지 않는다. 키는 원 DB 커밋부터 24시간만 유효하며 수명을 연장하지 않는다.
-        새 탈퇴를 시작하거나 계정·로그인·권한을 복구하지 않고, 개인정보·계정 상태 응답 본문도 반환하지 않는다.
-        원 DB 커밋이 없거나 키가 불명·만료된 경우 동일한 404다. 본문·사용자 ID·임의 작업 인자를 받지 않는다.
-        같은 키의 동시 요청도 원 이벤트를 멱등 처리한다. 불명 키 탐색은 IP별 속도 제한을 적용한다.
-      security:
-      - withdrawalReceipt: []
-      x-requirements: [FR-USER-005-02, FR-APP-008-09, NFR-OPS-002-03]
-      x-audit-event: user.withdrawal_completion_retried
-      parameters:
-      - $ref: '#/components/parameters/RequestId'
-      - $ref: '#/components/parameters/WithdrawalReceipt'
-      responses:
-        '204':
-          description: 원 탈퇴 처리 완료. 반복 확인에도 동일 응답
-          headers:
-            Cache-Control:
-              $ref: '#/components/headers/NoStore'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '422':
-          $ref: '#/components/responses/ValidationFailed'
-        '429':
-          $ref: '#/components/responses/TooManyRequests'
-        '503':
-          $ref: '#/components/responses/SecurityChangeUnavailable'
-
-  /sso/auth/withdrawals/complete:
-    post:
-      operationId: ssoCompleteWithdrawal
-      tags: [SSO]
-      summary: 브라우저의 탈퇴 완료 처리 재개
-      description: |
-        자기 Origin·CSRF 헤더와 Withdrawal-Receipt를 검증한다. 종료된 로그인 세션 쿠키를 요구하지 않는다.
-        확인 키만 고정된 completeWithdrawal로 전달하며 브라우저 Authorization·Cookie·임의 본문은 전달하지 않는다.
-        성공 시 현재 세션 쿠키와 클라이언트에 보관한 확인 키를 정리한다. 미완료 시 키의 원 만료 시각을 유지한다.
-      security:
-      - withdrawalReceipt: []
-        csrfHeader: []
-      x-sso-upstream:
-        method: POST
-        path: /api/v1/auth/withdrawals/complete
-      x-requirements: [FR-USER-005-02, FR-APP-008-09, NFR-OPS-002-03]
-      parameters:
-      - $ref: '#/components/parameters/RequestId'
-      - $ref: '#/components/parameters/WithdrawalReceipt'
-      responses:
-        '204':
-          description: 원 탈퇴 처리 완료
-          headers:
-            Cache-Control:
-              $ref: '#/components/headers/NoStore'
-            Set-Cookie:
-              $ref: '#/components/headers/ClearSsoSessionCookie'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '422':
-          $ref: '#/components/responses/ValidationFailed'
-        '429':
-          $ref: '#/components/responses/TooManyRequests'
-        '503':
-          $ref: '#/components/responses/SecurityChangeUnavailable'
-
   /api/v1/users/me/withdrawal:
     post:
       operationId: withdrawMe
@@ -1141,8 +1063,8 @@ paths:
         - `users` 행과 직접·간접 FK로 연결된 모든 자손을 같은 트랜잭션에서 물리 삭제한다. 기존 사용자 ID를 재사용하지 않는다.
         - 인증 정보·과거 해지 멤버십·종료 로그인·토큰 요청과 처리 이력을 삭제한다. 테넌트·서비스·OIDC 설정은 유지하며 접근 자격 변경의 완료 조건은 8장 규약을 따른다.
         - 개인정보를 추가 보관하지 않는다. `audit_logs`는 사용자 FK 없이 유지하고 기존 사용자 ID·탈퇴 시각·삭제 결과를 개인정보 값 없이 기록한다.
-        - 최초 요청 전에 클라이언트가 만든 Withdrawal-Receipt를 필수로 받는다. 원 사용자 ID·멱등 키·본문에 해시를 바인딩해 같은 탈퇴 트랜잭션에서 저장한다. 원 탈퇴 완료 확인·보안 기록은 사용자 FK 없이 보존하며 삭제된 사용자 프로필을 담은 기존 멱등 응답은 제거한다.
-        - 로그인 종료 후 응답 유실·503이면 전용 completeWithdrawal 경로를 사용한다. 완료 키의 수명은 DB 커밋부터 24시간이다.
+        - 원 탈퇴의 멱등·보안 기록은 사용자 FK 없이 개인정보 값·인증 비밀값 없이 보존하며 삭제된 사용자 프로필을 담은 기존 멱등 응답은 제거한다.
+        - DB 커밋 후 미완료 외부 확인은 서버가 재처리한다. 기존 인증은 종료되므로 해당 인증으로 원 API를 재호출하면 401이다.
         - **[제안]** 어떤 테넌트의 마지막 관리자이면 `409 last_tenant_admin`이고, 해당 `tenant_ids`를 함께 반환한다(16장 2번).
       x-requirements:
       - FR-USER-005
@@ -1151,13 +1073,11 @@ paths:
       - FR-APP-008-06
       - FR-APP-008-09
       - SC-06
-      - FR-USER-005-02
       - NFR-OPS-002-03
       x-audit-event: user.withdrawn
       parameters:
       - $ref: '#/components/parameters/RequestId'
       - $ref: '#/components/parameters/IdempotencyKeyRequired'
-      - $ref: '#/components/parameters/WithdrawalReceipt'
       requestBody:
         required: true
         content:
@@ -3414,7 +3334,7 @@ paths:
       summary: 'SSO: 계정 탈퇴'
       description: 고정된 POST /api/v1/users/me/withdrawal(withdrawMe)의 브라우저용 계약이다. 원 API의 필드·권한·테넌트·오류 계약을
         그대로 적용하며 SSO가 서버에서 저장된 토큰을 붙인다. 브라우저 Authorization·Cookie를 그대로 전달하거나 임의 API로 중계하지 않는다. 변경 요청은 자기 Origin·CSRF를
-        검증한다. 토큰 발급·갱신은 SSO 내부에서만 처리한다. 최초 요청의 Withdrawal-Receipt를 원 API에 전달하며, 커밋 후 세션 종료·응답 유실 시 ssoCompleteWithdrawal로 완료 처리를 재개한다.
+        검증한다. 토큰 발급·갱신은 SSO 내부에서만 처리한다. 204 또는 db_committed가 true인 503 응답을 받으면 세션과 쿠키를 정리한다. DB 커밋 후 미완료 외부 확인은 서버가 재처리한다.
       security:
       - ssoSessionCookie: []
         csrfHeader: []
@@ -3430,7 +3350,6 @@ paths:
       - SC-06
       - FR-AUTH-009-02-01
       - FR-AUTH-009-02-04
-      - FR-USER-005-02
       - NFR-OPS-002-03
       responses:
         '204':
@@ -3453,7 +3372,6 @@ paths:
       parameters:
       - $ref: '#/components/parameters/RequestId'
       - $ref: '#/components/parameters/IdempotencyKeyRequired'
-      - $ref: '#/components/parameters/WithdrawalReceipt'
       requestBody:
         required: true
         content:
@@ -4971,11 +4889,6 @@ components:
       scheme: bearer
       bearerFormat: JWT
       description: Passport 발급 RFC 9068 Access Token. 외부 Provider 토큰은 받지 않는다.
-    withdrawalReceipt:
-      type: apiKey
-      in: header
-      name: Withdrawal-Receipt
-      description: 원 탈퇴 요청의 완료 처리 전용 256비트 키. DB 커밋부터 24시간, 일반 API 인증 불가.
     csrfHeader:
       type: apiKey
       in: header
@@ -4997,17 +4910,6 @@ components:
         URI를 검증한다. 브라우저에 전달하지 않는다.
 
   parameters:
-    WithdrawalReceipt:
-      name: Withdrawal-Receipt
-      in: header
-      required: true
-      description: 첫 탈퇴 요청 전에 클라이언트가 생성·보관한 CSPRNG 32바이트의 base64url 값. 응답·로그에 노출하지 않는다.
-      schema:
-        type: string
-        minLength: 43
-        maxLength: 43
-        pattern: '^[A-Za-z0-9_-]{43}$'
-        writeOnly: true
     RequestId:
       name: X-Request-ID
       in: header
@@ -5213,7 +5115,7 @@ components:
             reused:
               value:
                 type: urn:passport:problem:refresh_token_reused
-                title: Refresh token reuse detected; all logins were ended
+                title: Refresh token reuse detected; all user sessions were ended
                 status: 401
                 code: refresh_token_reused
                 request_id: req_01JBX4T9Q2
@@ -5403,7 +5305,7 @@ components:
             code: too_many_requests
             request_id: req_01JBX4T9Q2
     SecurityChangeUnavailable:
-      description: security_record_pending(외부 보안 기록 미완료). db_committed로 DB 커밋 여부를 구분한다. 원 요청을 안전하게 재시도하며 탈퇴는 전용 완료 경로를 사용한다.
+      description: security_record_pending(외부 보안 기록 미완료). db_committed로 DB 커밋 여부를 구분한다. 원 요청을 안전하게 재시도하며 탈퇴 DB 커밋 후 미완료 외부 확인은 서버가 재처리한다.
       headers:
         Retry-After:
           $ref: '#/components/headers/RetryAfter'
@@ -5505,7 +5407,7 @@ components:
         audience: passport
         tenant_id: null
         login:
-          login_id: 0193a3d0-1111-7aaa-8bbb-0c0d0e0f1011
+          user_session_id: 0193a3d0-1111-7aaa-8bbb-0c0d0e0f1011
           auth_method: local
           client_type: web
           authenticated_at: '2026-10-31T09:00:00Z'
@@ -5523,7 +5425,7 @@ components:
         tenant_id: null
         refresh_token: prt_6h2kD9sQ0vYxZ1uN4mB7cL3aE8fR5tW
         login:
-          login_id: 0193a3d0-2222-7aaa-8bbb-0c0d0e0f1011
+          user_session_id: 0193a3d0-2222-7aaa-8bbb-0c0d0e0f1011
           auth_method: local
           client_type: native
           authenticated_at: '2026-10-31T09:00:00Z'
@@ -5538,7 +5440,7 @@ components:
         audience: passport
         tenant_id: 0193a3c1-7c2e-7d11-9a40-5b1e2f3a4b5c
         login:
-          login_id: 0193a3d0-1111-7aaa-8bbb-0c0d0e0f1011
+          user_session_id: 0193a3d0-1111-7aaa-8bbb-0c0d0e0f1011
           auth_method: local
           client_type: web
           authenticated_at: '2026-10-31T09:00:00Z'
@@ -5862,9 +5764,9 @@ components:
 
     LoginInfo:
       type: object
-      required: [login_id, auth_method, client_type, authenticated_at, expires_at, idle_expires_at]
+      required: [user_session_id, auth_method, client_type, authenticated_at, expires_at, idle_expires_at]
       properties:
-        login_id:
+        user_session_id:
           $ref: '#/components/schemas/Uuid'
         auth_method:
           type: string

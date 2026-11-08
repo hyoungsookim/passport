@@ -118,7 +118,7 @@ class UserSecurity(Base):
       to 0 and locked_until to NULL. OIDC logins leave these columns alone.
     - A password change updates the hash, algorithm and change time, clears
       must_change_password and the failure state, and ends all of the user's
-      logins, all in one transaction.
+      user sessions, all in one transaction.
     - Concurrent writers lock the row (FOR UPDATE) or use one atomic UPDATE.
     - Never map this row to a general user DTO.
     """
@@ -145,7 +145,7 @@ class UserSecurity(Base):
     failed_login_count: Mapped[int] = mapped_column(server_default=text("0"))
     # Kept as history after a successful login.
     last_failed_login_at: Mapped[datetime | None]
-    # Last Local or OIDC login that created a logins row. Reauthentication,
+    # Last Local or OIDC login that created a user_sessions row. Reauthentication,
     # token refresh and SSO session reuse do not update it.
     last_login_at: Mapped[datetime | None]
     # Local password lockout expiry; NULL or a past time means unlocked.

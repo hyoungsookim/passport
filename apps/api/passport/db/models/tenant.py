@@ -149,7 +149,7 @@ class TenantOidcConfiguration(Base):
       DISABLED. In the same transaction as the update, end every open login
       of this config_id with OIDC_TRUST_CHANGED and delete its pending OIDC
       login transactions and unused identity link tickets. A display_name
-      change keeps logins and pending flows.
+      change keeps user sessions and pending flows.
     - Lock order is the tenant row, then this row: FOR SHARE for login start,
       callback and link ticket use; FOR UPDATE for configuration changes.
       Calls to the provider run outside these locks.
