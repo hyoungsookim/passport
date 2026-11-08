@@ -17,7 +17,7 @@ Phase 2의 ORM(`passport/db/models/`)과 초기 Alembic 마이그레이션은 �
 | --- | --- |
 | DBMS | PostgreSQL 18, 스키마 `public` |
 | 테이블 이름 | 복수형 snake_case(`users`, `tenant_memberships`). PostgreSQL 예약어 `user`를 피한다 |
-| 기본 키 | `users`·`user_identities`·`tenants`·`tenant_oidc_configurations`·`tenant_memberships`·`user_sessions`는 `<엔터티>_id uuid`(`user_id`, `identity_id`, `tenant_id`, `config_id`, `membership_id`, `user_session_id`), `browser_sessions`는 `sesstion_id uuid`, 나머지 테이블은 `id uuid`. 값은 애플리케이션에서 `uuid.uuid7()`로 만든다. 시간순이라 인덱스 지역성이 좋고 계약의 ID 예시 형식과 같다. 1:1 확장 테이블은 부모 키를 PK로 쓴다 |
+| 기본 키 | `users`·`user_identities`·`tenants`·`tenant_oidc_configurations`·`tenant_memberships`·`user_sessions`·`client_sessions`·`auth_sessions`는 `<엔터티>_id uuid`(`user_id`, `identity_id`, `tenant_id`, `config_id`, `membership_id`, `user_session_id`, `client_session_id`, `auth_session_id`), 나머지 테이블은 `id uuid`. 값은 애플리케이션에서 `uuid.uuid7()`로 만든다. 시간순이라 인덱스 지역성이 좋고 계약의 ID 예시 형식과 같다. 1:1 확장 테이블은 부모 키를 PK로 쓴다 |
 | 시각 | `timestamptz`, UTC. `created_at`·`updated_at`의 기본값은 `now()` |
 | 열거 값 | Python `enum.IntEnum`의 명시적 정수 키(`.value`)를 PostgreSQL `smallint`에 저장한다. CHECK 적용 범위는 1.1절을 따른다 |
 | 이메일 | 소문자 정규화 값만 저장한다(계약 `Email`). `users.user_email`은 애플리케이션에서 정규화·검증한다 |
@@ -146,11 +146,9 @@ erDiagram
     USER_SESSIONS ||--o{ SESSION_BINDINGS : external_session_or_token
     USER_SESSIONS ||--o{ CLIENT_SESSIONS : per_client
     CLIENT_SESSIONS ||--o{ REFRESH_TOKENS : rotates
-    USER_SESSIONS ||--o{ BROWSER_SESSIONS : portal_session
-    CLIENT_SESSIONS ||--o| BROWSER_SESSIONS : held_by
+    TENANTS |o--o{ CLIENT_SESSIONS : selected_context
     TENANT_OIDC_CONFIGURATIONS ||--o{ AUTH_SESSIONS : starts
     USER_SESSIONS |o--o{ AUTH_SESSIONS : link_or_reauth
-    TENANT_OIDC_CONFIGURATIONS ||--o{ IDENTITY_LINK_TOKENS : issues
     USER_SESSIONS ||--o{ AUTHORIZATION_CODES : sso
     CLIENT_SESSIONS |o--o| AUTHORIZATION_CODES : exchanged_into
 ```
@@ -422,19 +420,32 @@ erDiagram
 
 #### `client_sessions`
 
-**목적:** 한 로그인에서 클라이언트별 Refresh Token 발급·회전을 관리하는 계열을 정의한다.
+**목적:** 한 로그인에서 클라이언트별 Refresh Token 계열과 Passport 포털의 SSO 브라우저 세션·서버 측 토큰 보관 정보를 함께 관리한다.
 
-**역할:** 로그인 하나에 클라이언트마다 계열 하나를 두어 Passport 포털·네이티브·SaaS의 토큰 이력을 구분한다. 계열 단위 잠금과 폐기를 통해 동시 회전 처리와 SSO 코드 재사용 시 해당 계열의 철회를 지원한다(FR-AUTH-009-02-01).
+**역할:** 로그인 하나에 클라이언트마다 계열 하나를 두어 Passport 포털·네이티브·SaaS의 토큰 이력을 구분한다. 포털에서는 불투명 쿠키를 같은 행의 선택 테넌트·암호화된 토큰에 연결하여 API 중계와 갱신을 지원한다. 계열 단위 잠금과 폐기로 동시 회전 처리와 SSO 코드 재사용 시 해당 계열의 철회를 지원하며, SaaS의 브라우저 세션은 각 SaaS가 별도로 관리한다(FR-AUTH-009-02-01).
 
 | 컬럼 | 형식 | NULL | 기본값 | 설명 |
 | --- | --- | --- | --- | --- |
-| `id` | uuid | | UUIDv7 | |
+| `client_session_id` | uuid | | UUIDv7 | PK |
 | `user_session_id` | uuid | | | FK `user_sessions`(`user_session_id`) `CASCADE` |
 | `client_id` | varchar(32) | | | `passport-portal`, `passport-native` 또는 Application `code`. Access Token `client_id` |
 | `revoked_at` | timestamptz | 예 | | 계열만 폐기할 때. SSO 코드 재사용 등 |
+| `sesstion_id` | uuid | 예 | | UNIQUE. 포털 브라우저 세션을 생성할 때 UUIDv7 부여. 요청한 철자를 유지하며 계열 PK `client_session_id`와 구분 |
+| `session_hash` | bytea | 예 | | UNIQUE. 포털 세션 쿠키 값의 SHA-256. 브라우저 세션이 없으면 NULL |
+| `refresh_token_ciphertext` | bytea | 예 | | 포털 SSO가 다음 갱신에 쓸 Refresh Token |
+| `tenant_id` | uuid | 예 | | FK `tenants`. 포털에서 현재 선택한 테넌트 |
+| `access_token_ciphertext` | bytea | 예 | | 포털 SSO가 보관하는 현재 Access Token |
+| `access_token_expires_at` | timestamptz | 예 | | 보관한 Access Token의 만료 시각 |
 | `created_at` | timestamptz | | `now()` | |
+| `updated_at` | timestamptz | | `now()` | 계열·브라우저 정보 변경 시 갱신 |
 
 - 인덱스 `user_session_id`
+- 브라우저 필드는 `sesstion_id`, `session_hash`, `refresh_token_ciphertext`, `tenant_id`, `access_token_ciphertext`, `access_token_expires_at`이다. 포털의 `client_id = 'passport-portal'`에서만 사용하며, 네이티브·SaaS 계열과 브라우저 세션 정리 후에는 모두 NULL이다.
+- CHECK `ck_client_sessions_browser`: `(session_hash IS NULL AND sesstion_id IS NULL AND refresh_token_ciphertext IS NULL AND tenant_id IS NULL AND access_token_ciphertext IS NULL AND access_token_expires_at IS NULL) OR (session_hash IS NOT NULL AND sesstion_id IS NOT NULL AND refresh_token_ciphertext IS NOT NULL AND client_id = 'passport-portal' AND revoked_at IS NULL)`
+- CHECK `ck_client_sessions_access_token`: `(access_token_ciphertext IS NULL) = (access_token_expires_at IS NULL)`
+- 쿠키는 `session_hash`로 조회하고, 계열의 `revoked_at IS NULL` 및 연결된 `user_sessions`의 현재 유효성을 항상 확인한다. 공개 식별자인 `client_session_id`·`sesstion_id`로 쿠키 인증을 대신하지 않는다.
+- 포털은 이 행을 `FOR UPDATE`로 잠근 뒤 최신 토큰을 읽고 `refresh_tokens`의 회전과 암호화된 보관 토큰 교체를 같은 트랜잭션에서 처리한다.
+- 로그아웃·로그인 종료·계열 폐기·복원 시 브라우저 필드를 모두 NULL로 비우고 `updated_at`을 갱신한다. 계열 행과 `refresh_tokens`의 회전 이력은 로그인 보존기간까지 유지하며, 사용자 탈퇴 시에는 FK 연쇄 삭제한다.
 
 #### `refresh_tokens`
 
@@ -445,34 +456,13 @@ erDiagram
 | 컬럼 | 형식 | NULL | 기본값 | 설명 |
 | --- | --- | --- | --- | --- |
 | `id` | uuid | | UUIDv7 | |
-| `family_id` | uuid | | | FK `client_sessions` `CASCADE` |
+| `family_id` | uuid | | | FK `client_sessions`(`client_session_id`) `CASCADE` |
 | `token_hash` | bytea | | | UNIQUE |
 | `issued_at` | timestamptz | | `now()` | |
 | `rotated_at` | timestamptz | 예 | | 회전되어 무효가 된 시각. 이 토큰이 다시 오면 재사용이다(FR-AUTH-009-07-01) |
 
 - 부분 UNIQUE `uq_refresh_tokens_active` (`family_id`) `WHERE rotated_at IS NULL`: 계열마다 유효한 토큰은 하나다
 - 자체 만료 시각이 없다. 유효 기간은 로그인의 최대 유지·미사용 만료를 따른다.
-
-#### `browser_sessions`
-
-**목적:** Passport 포털의 SSO 브라우저 세션과 서버 측 토큰 보관 정보를 관리한다.
-
-**역할:** 불투명 세션 쿠키를 원 로그인·Refresh Token 계열·선택 테넌트·암호화된 토큰에 연결하여 브라우저에 토큰을 노출하지 않는 API 중계·갱신을 지원한다. SaaS의 브라우저 세션은 각 SaaS가 별도로 관리한다.
-
-| 컬럼 | 형식 | NULL | 기본값 | 설명 |
-| --- | --- | --- | --- | --- |
-| `sesstion_id` | uuid | | UUIDv7 | PK. 요청한 컬럼명을 그대로 사용한다 |
-| `session_hash` | bytea | | | UNIQUE. 쿠키 값의 SHA-256 |
-| `user_session_id` | uuid | | | FK `user_sessions`(`user_session_id`) `CASCADE` |
-| `refresh_family_id` | uuid | | | FK `client_sessions` `CASCADE`, UNIQUE |
-| `refresh_token_ciphertext` | bytea | | | BFF가 다음 갱신에 쓸 토큰 |
-| `tenant_id` | uuid | 예 | | FK `tenants`. 현재 선택한 테넌트 |
-| `access_token_ciphertext` | bytea | 예 | | 현재 Access Token |
-| `access_token_expires_at` | timestamptz | 예 | | |
-| `created_at`, `updated_at` | | | | |
-
-- 인덱스 `user_session_id`
-- 로그아웃·로그인 종료 때 행을 지운다. 유효성은 항상 연결된 `user_sessions`로 판단한다.
 
 #### `signing_keys`
 
@@ -494,17 +484,17 @@ erDiagram
 
 ### 4.5 일회성 값
 
-이 절의 OIDC 트랜잭션·연결 티켓·SSO 코드는 해시로 찾고, 소비는 `UPDATE … SET consumed_at = now() WHERE … AND consumed_at IS NULL AND expires_at > now() RETURNING …` 한 문장으로 한다. 이메일 확인 토큰은 4.1절에 따라 확인 성공 시 행을 삭제한다.
+OIDC 콜백과 SSO 코드는 해시로 찾고 `UPDATE … SET consumed_at = now() WHERE … AND consumed_at IS NULL AND expires_at > now() RETURNING …`으로 한 번만 소비한다. 연결 티켓은 같은 `auth_sessions` 행의 `ticket_hash`로 찾고 `ticket_consumed_at`·`ticket_expires_at`을 별도로 검증하여 소비한다. 각 소비와 업무 변경은 같은 트랜잭션에서 처리한다. 이메일 확인 토큰은 4.1절에 따라 확인 성공 시 행을 삭제한다.
 
 #### `auth_sessions`
 
-**목적:** 외부 OIDC 로그인·신원 연결·재인증의 시작 요청과 콜백을 연결하는 단기 인증 트랜잭션을 보관한다.
+**목적:** 외부 OIDC 로그인·신원 연결·재인증의 시작 요청부터 콜백과 후속 신원 연결 티켓까지 하나의 단기 인증 흐름으로 관리한다.
 
-**역할:** state·nonce·PKCE와 대상 테넌트·OIDC 설정·최초 브라우저를 함께 연결하여 콜백의 유효성을 검증하는 근거를 제공한다. 만료·소비 상태를 관리하며, 신뢰 설정 변경 시 미완료 행을 삭제하여 이전 설정으로 시작한 인증 결과의 반영을 막는다.
+**역할:** state·nonce·PKCE와 대상 테넌트·OIDC 설정·최초 브라우저를 연결하여 콜백을 검증한다. 신원 연결이 필요하면 같은 행에 검증된 외부 신원과 일회용 티켓을 기록하여 기존 계정 재인증·명시적 확인 후 연결하는 근거로 사용한다. 콜백과 티켓의 소비·만료를 별도로 관리하며, 신뢰 설정 변경 시 미완료 흐름을 삭제한다.
 
 | 컬럼 | 형식 | NULL | 기본값 | 설명 |
 | --- | --- | --- | --- | --- |
-| `id` | uuid | | UUIDv7 | |
+| `auth_session_id` | uuid | | UUIDv7 | PK |
 | `state_hash` | bytea | | | UNIQUE |
 | `browser_binding_hash` | bytea | | | 최초 브라우저의 트랜잭션 전용 비밀 쿠키 값의 SHA-256 |
 | `nonce_hash` | bytea | | | ID Token `nonce`와 비교 |
@@ -514,36 +504,26 @@ erDiagram
 | `intent` | smallint | | | `OidcIntent`. `login`, `link`, `reauth` |
 | `return_to` | varchar(2048) | | | 등록된 포털 완료 URI |
 | `user_session_id` | uuid | 예 | | FK `user_sessions`(`user_session_id`) `CASCADE`. `link`·`reauth`가 묶인 로그인 |
-| `expires_at` | timestamptz | | | **[제안]** 생성 후 10분 |
-| `consumed_at` | timestamptz | 예 | | |
+| `expires_at` | timestamptz | | | OIDC 콜백의 만료. **[제안]** 인증 시작 후 10분 |
+| `consumed_at` | timestamptz | 예 | | OIDC 콜백을 소비한 시각. 티켓 소비와 구분 |
+| `ticket_hash` | bytea | 예 | | UNIQUE. 콜백에서 연결 티켓을 발급한 경우에만 기록하는 SHA-256 |
+| `issuer` | varchar(2048) | 예 | | 티켓에 연결된 검증된 외부 신원. 티켓 미발급 시 NULL |
+| `subject` | varchar(255) | 예 | | 티켓에 연결된 검증된 외부 신원. 티켓 미발급 시 NULL |
+| `ticket_issued_at` | timestamptz | 예 | | 연결 티켓 발급 시각 |
+| `ticket_expires_at` | timestamptz | 예 | | **[제안]** 티켓 발급 후 10분. 콜백의 `expires_at`과 독립 |
+| `ticket_consumed_at` | timestamptz | 예 | | 연결 티켓을 소비한 시각. 미사용이면 NULL |
 | `created_at` | timestamptz | | `now()` | |
 
 - CHECK `ck_auth_sessions_browser_binding_hash`: `octet_length(browser_binding_hash) = 32`
 - CHECK `ck_auth_sessions_intent`: `(intent = 1) = (user_session_id IS NULL)`
+- CHECK `ck_auth_sessions_ticket`: `(ticket_hash IS NULL AND issuer IS NULL AND subject IS NULL AND ticket_issued_at IS NULL AND ticket_expires_at IS NULL AND ticket_consumed_at IS NULL) OR (ticket_hash IS NOT NULL AND issuer IS NOT NULL AND subject IS NOT NULL AND ticket_issued_at IS NOT NULL AND ticket_expires_at IS NOT NULL AND consumed_at IS NOT NULL AND intent IN (1, 2))`
 - BFF 시작 경로가 트랜잭션마다 256비트 난수를 만들어 `__Host-passport_oidc_<id>` 쿠키(`HttpOnly; Secure; SameSite=Lax; Path=/`, `Domain` 없음)에 둔다. 만료는 트랜잭션과 같고 값은 JSON·URL에 반환하지 않는다. 병렬 로그인은 별도 쿠키를 사용한다.
 - 콜백은 **소비 전에** 해당 쿠키의 해시를 대조한다. 누락·불일치면 거부하며 세션 생성·신원 연결·재인증을 수행하지 않는다. 성공 또는 정상적인 종결 시 쿠키를 지운다. `state`·`nonce`·PKCE 검증도 함께 유지한다.
 - 시작 시 5.4절의 순서로 테넌트·설정 행을 잠그고 활성 설정으로 트랜잭션을 생성한다. 콜백은 외부 검증 후 결과를 저장하기 전에 같은 순서로 잠그고 트랜잭션을 DB에서 다시 조회하여 존재·미소비·미만료와 설정 활성 상태를 재검증한 뒤 소비한다. 신뢰 변경으로 삭제된 트랜잭션의 인증 결과는 반영하지 않는다.
-
-#### `identity_link_tokens`
-
-**목적:** 외부 인증에 성공한 신원을 기존 Passport 계정에 명시적으로 연결하기 위한 일회용 확인 근거를 보관한다.
-
-**역할:** 티켓을 검증된 외부 신원·테넌트·OIDC 설정 및 필요한 경우 원 로그인에 연결하고 만료·소비 여부를 관리한다. 기존 계정 재인증과 사용자의 연결 확인을 거쳐 외부 신원을 추가하는 절차에 사용한다.
-
-| 컬럼 | 형식 | NULL | 기본값 | 설명 |
-| --- | --- | --- | --- | --- |
-| `id` | uuid | | UUIDv7 | |
-| `ticket_hash` | bytea | | | UNIQUE |
-| `issuer` | varchar(2048) | | | 연결할 외부 신원 |
-| `subject` | varchar(255) | | | |
-| `tenant_id` | uuid | | | FK `tenants` |
-| `config_id` | uuid | | | FK `tenant_oidc_configurations` |
-| `user_session_id` | uuid | 예 | | FK `user_sessions`(`user_session_id`) `CASCADE`. `intent = link`에서 시작한 로그인 |
-| `expires_at` | timestamptz | | | **[제안]** 발급 후 10분 |
-| `consumed_at` | timestamptz | 예 | | |
-| `created_at` | timestamptz | | `now()` | |
-
-- 신뢰 설정 변경 시 해당 설정의 미사용 티켓을 삭제한다. 티켓 소비는 5.4절의 테넌트·설정 행 잠금과 현재 활성 상태 확인 후 DB에서 티켓을 다시 조회하여 처리한다. 삭제된 티켓은 `400 invalid_token_value`이며 신원 연결을 수행하지 않는다.
+- `link_required`(`intent = login`) 또는 `link_ready`(`intent = link`)이면 콜백 소비와 같은 트랜잭션에서 이 행에 티켓 해시·외부 신원·발급/만료 시각을 기록한다. 한 흐름에서 티켓은 최대 하나만 발급하며 콜백 재사용으로 재발급하지 않는다. `intent = reauth`는 티켓을 발급하지 않는다.
+- 연결 API는 기존 계정 재인증·`confirm: true`를 검증하고 5.4절 잠금 및 현재 활성 설정 확인 후 `ticket_hash`로 같은 행을 다시 조회한다. `intent = link`이면 요청의 로그인과 저장된 `user_session_id`도 일치해야 한다. `intent = login`의 이메일 충돌 흐름은 저장된 로그인 없이 기존 계정으로 로그인·재인증한 사용자의 명시적 확인으로 처리한다.
+- 티켓은 `UPDATE auth_sessions SET ticket_consumed_at = now() WHERE ticket_hash = :ticket_hash AND consumed_at IS NOT NULL AND ticket_consumed_at IS NULL AND ticket_expires_at > now() RETURNING …`으로 한 번만 소비하고 `user_identities` 삽입과 같은 트랜잭션으로 커밋한다. 삽입 실패 시 티켓 소비도 롤백한다. 콜백의 `expires_at` 경과나 바인딩 쿠키 삭제만으로 유효한 티켓을 거부하지 않으며, `state_hash`를 티켓 대신 받지 않는다.
+- 신뢰 변경 시 콜백이 미소비이거나 티켓이 발급되어 미소비인 해당 설정의 행을 삭제한다. 삭제·미발급·만료·소비된 티켓은 `400 invalid_token_value`이며 신원을 연결하지 않는다. 만료 정리는 9.1절에 따라 티켓 유효기간까지 행을 보존한다.
 
 #### `authorization_codes`
 
@@ -562,7 +542,7 @@ erDiagram
 | `code_challenge` | varchar(128) | | | S256 |
 | `expires_at` | timestamptz | | | **[제안]** 발급 후 60초 |
 | `consumed_at` | timestamptz | 예 | | |
-| `refresh_family_id` | uuid | 예 | | FK `client_sessions` `CASCADE`. 교환으로 만든 계열. 코드가 다시 오면 이 계열을 폐기한다 |
+| `refresh_family_id` | uuid | 예 | | FK `client_sessions`(`client_session_id`) `CASCADE`. 교환으로 만든 계열. 코드가 다시 오면 이 계열을 폐기한다 |
 | `created_at` | timestamptz | | `now()` | |
 
 ### 4.6 운영
@@ -664,12 +644,14 @@ erDiagram
 `enabled` ↔ `disabled`. 신뢰 변경(`issuer`, `client_id`, `client_secret` 변경과 `enabled → disabled`)은 다음과 같이 처리한다(D-06).
 
 - 잠금 순서는 테넌트 행 → OIDC 설정 행이다. 인증 시작·콜백 결과 반영·연결 티켓 소비는 두 행을 `FOR SHARE`로 잠그고, 설정 변경은 같은 순서로 `FOR UPDATE`로 잠근다. 외부 검증 통신은 결과 반영용 잠금 밖에서 수행한다.
-- 설정 갱신과 함께 같은 `config_id`의 종료되지 않은 로그인을 `oidc_trust_changed`로 끝내고, 미완료 OIDC 로그인 트랜잭션과 미사용 연결 티켓을 삭제한다. 로그인 종료와 설정·흐름 취소를 같은 DB 트랜잭션에서 커밋한다.
+- 설정 갱신과 함께 같은 `config_id`의 종료되지 않은 로그인을 `oidc_trust_changed`로 끝내고 연결된 `client_sessions`의 브라우저 필드를 비운다. `auth_sessions`에서는 `consumed_at IS NULL OR (ticket_hash IS NOT NULL AND ticket_consumed_at IS NULL)`인 해당 설정의 행을 삭제한다. 콜백이 이미 소비되었어도 미사용 연결 티켓이 있으면 삭제 대상이다. 로그인 종료와 설정·흐름 취소를 같은 DB 트랜잭션에서 커밋한다.
 - 콜백·티켓 소비는 잠금 후 DB의 현재 행을 다시 확인한다. 변경이 먼저 커밋되면 취소된 흐름의 결과를 거부하고, 인증 결과가 먼저 커밋되면 후속 설정 변경이 그 로그인도 종료한다. 표시명 변경은 로그인·미완료 흐름을 유지한다.
 
 ### 5.5 사용자 세션
 
 진행 중(`ended_at IS NULL`) → 종료. 최대 유지·미사용 만료는 시각으로 계산하며 상태를 바꾸지 않는다.
+
+아래 모든 종료 사유와 최대 유지·미사용 만료가 확인되면 연결된 `client_sessions`의 브라우저 필드를 같은 트랜잭션에서 비운다. 계열·토큰 이력은 9.1절의 로그인 보존기간까지 유지한다. 계열만 폐기하는 SSO 코드 재사용도 해당 계열의 `revoked_at` 설정과 브라우저 필드 정리를 함께 처리한다.
 
 | `end_reason` | 사건 | 범위 |
 | --- | --- | --- |
@@ -699,8 +681,8 @@ erDiagram
 | 경로 | 삭제 대상 |
 | --- | --- |
 | 사용자 직접 참조 | `user_securities`, `user_identities`, `email_verification_tokens`, `tenant_memberships`, `user_sessions` |
-| 로그인 자손 | `session_bindings`, `client_sessions` → `refresh_tokens`, `browser_sessions` |
-| 로그인·토큰 계열에 연결된 일회성 값 | `auth_sessions`, `identity_link_tokens`, `authorization_codes` |
+| 로그인 자손 | `session_bindings`, `client_sessions`(포털 브라우저 정보 포함) → `refresh_tokens` |
+| 로그인·토큰 계열에 연결된 일회성 값 | `auth_sessions`(연결 티켓 포함), `authorization_codes` |
 | FK가 없는 감사 기록 | `audit_logs`는 삭제하지 않는다. 원 사용자 ID·탈퇴 시각·삭제 결과를 개인정보 값 없이 기록한다 |
 | 사용자 FK가 없는 운영 기록 | 원 탈퇴의 `idempotency_keys`, `security_change_events`는 외부 보안 기록 재처리·복원을 위해 필요한 기간 유지한다. 프로필 값·인증 비밀값은 보관하지 않는다 |
 
@@ -713,12 +695,12 @@ erDiagram
 | Local 가입 | `users`, 비밀번호 해시·알고리즘·변경 시각을 설정한 `user_securities`, `email_verification_tokens` 삽입 | 이메일 UNIQUE 위반이면 롤백하고 안내 메일만 보낸다(응답은 항상 202) |
 | 이메일 확인 메일 재발송 | 미확인 Local 가입 계정의 `user_id` 기준 토큰 UPSERT. 해시·만료·발급 시각 교체 | `users` 행을 `FOR UPDATE`로 잠그고 확인 처리와 직렬화한다. 이전 토큰은 무효이며 확인 완료 계정에는 발급하지 않는다 |
 | 이메일 확인 | 현재 토큰 행 삭제, `email_verified_at` 기록, `users.user_status = active` | `users` 행 잠금 후 계정·토큰 재검증과 조건부 `DELETE … RETURNING`으로 한 번만 소비한다. 사용자 변경 실패 시 삭제도 롤백한다 |
-| Local 로그인·비밀번호 재인증 | `user_securities` 잠금·자격 증명 확인 및 실패/성공 통계 갱신. 새 로그인이면 `user_sessions`, `client_sessions`, `refresh_tokens` 삽입, 포털이면 `browser_sessions`도 | 보안 행 `FOR UPDATE`로 판정·갱신을 직렬화한다. 실패 통계는 실패 응답 전에 커밋하며 새 로그인은 새 세션 ID를 발급한다 |
-| 토큰 발급·갱신 | 계열 잠금, 현재 접근 자격 확인, 토큰 회전 | `SELECT … FROM client_sessions WHERE id = :id FOR UPDATE`로 같은 계열을 직렬화한다. 포털 BFF는 잠금 안에서 최신 저장 토큰을 읽고, 회전과 `browser_sessions`의 토큰 교체를 같은 트랜잭션에서 커밋한다. 회전된 토큰이 제출되면 사용자의 모든 로그인을 끝내고 커밋한 뒤 401이다. 503이나 조건 미충족이면 롤백해 회전하지 않는다 |
-| 로그아웃, 비밀번호 변경, 계정 차단 | `user_sessions` 종료, `browser_sessions` 삭제. 비밀번호 변경이면 `user_securities`의 비밀번호 해시·알고리즘·변경 시각·변경 필요 여부·실패/잠금 상태도 갱신 | `WHERE ended_at IS NULL`. 비밀번호 변경은 보안 행을 잠그고 로그인·재인증과 직렬화한다 |
-| OIDC 콜백 | 브라우저 바인딩 대조 후 트랜잭션 소비, 사용자·신원 생성 또는 조회. 신규 계정은 `user_securities`도 생성하고 새 로그인 성공이면 `last_login_at` 갱신. `intent = login`이고 소속 이력이 없으면 일반 구성원의 `active` 멤버십·`joined_at` 생성. `user_sessions`·`session_bindings`·계열·`browser_sessions` 생성, 또는 링크 티켓 발급 | 원자적 소비, 신원 UNIQUE. 사용자 행을 잠근 뒤 해당 테넌트의 전체 소속 이력을 확인하고 부분 UNIQUE로 중복 생성을 막는다. 기존 활성 소속은 유지하며 해지·비활성 멤버십은 자동 복구하지 않는다. 신원 연결·재인증 콜백은 소속을 생성하지 않는다. Local 실패·잠금은 변경하지 않는다. 최종 반영은 5.4절의 잠금·활성 설정 및 인증 트랜잭션 재검증으로 신뢰 설정 변경과 직렬화한다 |
-| 외부 신원 연결 | 활성 OIDC 설정·티켓 재검증 후 링크 티켓 소비, `user_identities` 삽입 | 5.4절 잠금으로 신뢰 변경과 직렬화한다. UNIQUE 위반 → `409 identity_already_linked` |
-| SSO 코드 발급·교환 | 발급: 코드 삽입. 교환: 코드 소비, 계열·토큰 삽입, 코드에 계열 기록 | 원자적 소비. 이미 소비된 코드면 기록된 계열을 폐기한다 |
+| Local 로그인·비밀번호 재인증 | `user_securities` 잠금·자격 증명 확인 및 실패/성공 통계 갱신. 새 로그인이면 `user_sessions`, `client_sessions`, `refresh_tokens` 삽입. 포털이면 같은 `client_sessions` 행에 브라우저 필드도 설정 | 보안 행 `FOR UPDATE`로 판정·갱신을 직렬화한다. 실패 통계는 실패 응답 전에 커밋하며 새 로그인은 새 세션 ID를 발급한다 |
+| 토큰 발급·갱신 | 계열 잠금, 현재 접근 자격 확인, 토큰 회전 | `SELECT … FROM client_sessions WHERE client_session_id = :client_session_id FOR UPDATE`로 같은 계열을 직렬화한다. 포털 SSO는 잠금 안에서 최신 저장 토큰을 읽고, 회전과 같은 행의 암호화된 토큰 교체를 같은 트랜잭션에서 커밋한다. 회전된 토큰이 제출되면 사용자의 모든 로그인을 끝내고 브라우저 필드를 비운 뒤 커밋하고 401이다. 503이나 조건 미충족이면 롤백해 회전하지 않는다 |
+| 로그아웃, 비밀번호 변경, 계정 차단 | `user_sessions` 종료, 연결된 `client_sessions`의 브라우저 필드 정리. 비밀번호 변경이면 `user_securities`의 비밀번호 해시·알고리즘·변경 시각·변경 필요 여부·실패/잠금 상태도 갱신 | `WHERE ended_at IS NULL`. 계열 행·토큰 이력은 보존한다. 비밀번호 변경은 보안 행을 잠그고 로그인·재인증과 직렬화한다 |
+| OIDC 콜백 | 브라우저 바인딩 대조 후 `auth_sessions.consumed_at` 설정, 사용자·신원 생성 또는 조회. 신규 계정은 `user_securities`도 생성하고 새 로그인 성공이면 `last_login_at` 갱신. `intent = login`이고 소속 이력이 없으면 일반 구성원의 `active` 멤버십·`joined_at` 생성. `user_sessions`·`session_bindings`·계열·토큰과 포털 브라우저 필드를 생성하거나, 같은 인증 흐름 행에 연결 티켓 발급 | 원자적 소비, 신원 UNIQUE. 사용자 행을 잠근 뒤 해당 테넌트의 전체 소속 이력을 확인하고 부분 UNIQUE로 중복 생성을 막는다. 기존 활성 소속은 유지하며 해지·비활성 멤버십은 자동 복구하지 않는다. 신원 연결·재인증 콜백은 소속을 생성하지 않는다. Local 실패·잠금은 변경하지 않는다. 최종 반영은 5.4절의 잠금·활성 설정 및 인증 트랜잭션 재검증으로 신뢰 설정 변경과 직렬화한다 |
+| 외부 신원 연결 | 활성 OIDC 설정·티켓 재검증 후 `auth_sessions.ticket_consumed_at` 설정, `user_identities` 삽입 | 5.4절 잠금으로 신뢰 변경과 직렬화한다. 콜백 만료와 별도로 티켓 만료를 검사하며 실패 시 티켓 소비도 롤백한다. UNIQUE 위반 → `409 identity_already_linked` |
+| SSO 코드 발급·교환 | 발급: 코드 삽입. 교환: 코드 소비, 계열·토큰 삽입, 코드에 계열 기록 | 원자적 소비. 이미 소비된 코드면 기록된 계열을 폐기하고 해당 행의 브라우저 필드도 비운다 |
 | 테넌트 생성 | `tenants`, 생성자 `admin` 멤버십 삽입 | `tenant_code` UNIQUE → `409 already_exists` |
 | 멤버 추가 | 기존 사용자 확인, `active` 멤버십·`joined_at` 삽입, 멱등 결과 기록 | 사용자 FK와 부분 UNIQUE로 탈퇴·동시 추가와의 경합을 막는다. 같은 멱등 키 재시도는 원 결과를 반환한다 |
 | 접근 자격 변경 | 8장 | 마지막 관리자 검사는 그 테넌트의 `active` `admin` 멤버십을 `FOR UPDATE`로 잠근 뒤 센다 |
@@ -742,8 +724,9 @@ erDiagram
 
 | 대상 | 조건 | 주기 **[제안]** |
 | --- | --- | --- |
-| `auth_sessions`, `identity_link_tokens`, `authorization_codes`, `email_verification_tokens` | `expires_at` 경과 | 1시간 |
-| `user_sessions`(`CASCADE`로 계열, 토큰, `browser_sessions`) | `ended_at` 또는 `expires_at`에서 1일 경과 | 1일 |
+| `auth_sessions` | `expires_at <= now() AND (ticket_hash IS NULL OR ticket_expires_at <= now())`. 콜백 만료 후에도 유효한 연결 티켓이 있으면 유지 | 1시간 |
+| `authorization_codes`, `email_verification_tokens` | `expires_at` 경과 | 1시간 |
+| `user_sessions`(`CASCADE`로 브라우저 필드를 포함한 계열·토큰) | `ended_at` 또는 `expires_at`에서 1일 경과. 브라우저 필드는 종료·만료 확인 시 이미 비움 | 1일 |
 | `idempotency_keys` | `expires_at` 경과 | 1시간 |
 | `security_change_events` | 미확인 행 재처리. 확인된 행 삭제는 9.4절 보존 조건 충족 후 | 10초 / 1일 |
 | `audit_logs` | `occurred_at`에서 365일 경과(NFR-SEC-007-01) | 1일 |
@@ -768,7 +751,7 @@ erDiagram
 서비스를 다시 열기 전에 다음을 실행한다.
 
 1. 서비스 유입·변경 작업을 중지하고 복원 백업의 외부 저널 기준점과 보존 기록의 연속성을 검증한다. 9.4절에 따라 탈퇴·차단·해지·삭제를 먼저 재적용한다. 누락·검증 실패가 있으면 서비스를 재개하지 않는다.
-2. 모든 진행 중 로그인을 `restore`로 끝내고 `browser_sessions`를 지운다.
+2. 모든 진행 중 로그인을 `restore`로 끝내고 모든 `client_sessions`의 브라우저 필드를 비운다. 계열 행과 토큰 회전 이력은 로그인 보존기간까지 유지한다.
 3. 모든 `signing_keys`를 폐기하고 새 키를 만든다. 복원 전 Access Token은 서명 검증에서 거부된다.
 4. 복원 전 토큰 거부·삭제 정보 비노출·접근 차단을 DB 현재 상태로 검증한 뒤에만 서비스를 재개한다(NFR-OPS-002-02).
 
@@ -793,13 +776,13 @@ erDiagram
 | API 묶음 | operation | 주로 읽음 | 씀 |
 | --- | --- | --- | --- |
 | 가입·이메일 확인 | `signupLocal`, `confirmEmailVerification`, `resendEmailVerification` | `users` | `users`, `user_securities`, `email_verification_tokens` |
-| Local 로그인·재인증 | `loginLocal`, `ssoLoginLocal`, `reauthenticateWithPassword` | `users`, `user_securities` | `user_securities`, `user_sessions`, `client_sessions`, `refresh_tokens`, `browser_sessions` |
-| 토큰 | `issueToken`, `ssoSelectContext`, `exchangeSsoCode` | `user_sessions`, `tenants`, `tenant_memberships`, `tenant_applications`, `applications`, `tenant_oidc_configurations` | `refresh_tokens`, `authorization_codes`, `browser_sessions`, `user_sessions` |
-| 로그아웃·세션 | `logout`, `logoutAll`, `ssoLogout`, `ssoLogoutAll`, `ssoGetSession` | `browser_sessions`, `user_sessions`, `refresh_tokens` | `user_sessions`, `browser_sessions` |
+| Local 로그인·재인증 | `loginLocal`, `ssoLoginLocal`, `reauthenticateWithPassword` | `users`, `user_securities` | `user_securities`, `user_sessions`, `client_sessions`, `refresh_tokens` |
+| 토큰 | `issueToken`, `ssoSelectContext`, `exchangeSsoCode` | `user_sessions`, `client_sessions`, `tenants`, `tenant_memberships`, `tenant_applications`, `applications`, `tenant_oidc_configurations` | `refresh_tokens`, `authorization_codes`, `client_sessions`, `user_sessions` |
+| 로그아웃·세션 | `logout`, `logoutAll`, `ssoLogout`, `ssoLogoutAll`, `ssoGetSession` | `client_sessions`, `user_sessions`, `refresh_tokens` | `user_sessions`, `client_sessions`(브라우저 필드 정리) |
 | JWKS | `getJwks` | `signing_keys` | |
-| OIDC | `getTenantLoginOptions`, `ssoStartOidcAuthorization`, `ssoOidcCallback` | `tenants`, `tenant_oidc_configurations`, `user_identities`, `tenant_memberships` | `auth_sessions`, `users`, `user_securities`, `user_identities`, `tenant_memberships`(최초 소속 자동 추가), `user_sessions`, `session_bindings`, 계열·토큰, `browser_sessions`, `identity_link_tokens` |
-| SSO | `ssoAuthorize` | `browser_sessions`, `user_sessions`, `applications`, `tenant_memberships`, `tenant_applications` | `authorization_codes` |
-| 본인 정보 | `getMe`, `updateMe`, `changePassword`, `listMyTenants`, `listMyIdentities`, `linkIdentity`, `withdrawMe` | `users`, `user_securities`, `user_identities`, `tenant_memberships` | 같은 테이블, `identity_link_tokens`, `user_sessions` |
+| OIDC | `getTenantLoginOptions`, `ssoStartOidcAuthorization`, `ssoOidcCallback` | `tenants`, `tenant_oidc_configurations`, `user_identities`, `tenant_memberships`, `auth_sessions` | `auth_sessions`(콜백·연결 티켓), `users`, `user_securities`, `user_identities`, `tenant_memberships`(최초 소속 자동 추가), `user_sessions`, `session_bindings`, `client_sessions`, `refresh_tokens` |
+| SSO | `ssoAuthorize` | `client_sessions`, `user_sessions`, `applications`, `tenant_memberships`, `tenant_applications` | `authorization_codes` |
+| 본인 정보 | `getMe`, `updateMe`, `changePassword`, `listMyTenants`, `listMyIdentities`, `linkIdentity`, `withdrawMe` | `users`, `user_securities`, `user_identities`, `tenant_memberships`, `auth_sessions` | 같은 테이블, `user_sessions`, `client_sessions` |
 | 테넌트 설정 | `createTenant`, `getTenant`, `updateTenant`, `getTenantOidcConfiguration`, `putTenantOidcConfiguration` | `tenants`, `tenant_oidc_configurations` | `tenants`, `tenant_memberships`, `tenant_oidc_configurations`, `user_sessions` |
 | 멤버 | `listTenantMembers`, `addTenantMember`, `getTenantMember`, `updateTenantMember`, `removeTenantMember` | `tenant_memberships`, `users` | `tenant_memberships` |
 | 탈퇴 | `withdrawMe` | `users`, `tenant_memberships`, `idempotency_keys` | 사용자·FK 자손 삭제, `audit_logs`, `idempotency_keys`, `security_change_events`, 외부 확인 |
@@ -814,11 +797,11 @@ erDiagram
 | FR-USER-001~004, 002-01, 002-02 | `users` |
 | FR-USER-003, D-04 | `users.user_status`, `email_verification_tokens.user_id` PK/FK(`1:0..1`), 재발송 시 교체·확인 시 원자적 삭제 |
 | FR-USER-005, 005-01 | 사용자 FK의 `CASCADE`, `audit_logs`, `security_change_events`, 9.2절 |
-| FR-USER-006, 007, FR-OIDC-004, 005, D-08 | `users`의 전역 ID·프로필, `user_securities`의 Local 인증 정보, 인증 비밀값을 제외하는 DTO, `user_identities` UNIQUE(`issuer`, `subject`), `identity_link_tokens` |
+| FR-USER-006, 007, FR-OIDC-004, 005, D-08 | `users`의 전역 ID·프로필, `user_securities`의 Local 인증 정보, 인증 비밀값을 제외하는 DTO, `user_identities` UNIQUE(`issuer`, `subject`), `auth_sessions`의 연결 티켓 필드 |
 | FR-AUTH-001, 005~007, NFR-SEC-005 | `users.user_status`, `user_securities`의 비밀번호·실패/잠금 상태 |
 | FR-AUTH-008, 008-01, NFR-SEC-002 | `signing_keys` |
 | FR-AUTH-009-01~07, 009-07-01 | `user_sessions`, `client_sessions`, `refresh_tokens`, 5.5절 |
-| ADR-014, D-03, FR-AUTH-009-02-01~04, NFR-SEC-003 | `browser_sessions`, `client_sessions.client_id`, `authorization_codes`, `applications.bff_redirect_uris` |
+| ADR-014, D-03, FR-AUTH-009-02-01~04, NFR-SEC-003 | `client_sessions`의 계열·포털 브라우저 필드, `authorization_codes`, `applications.bff_redirect_uris` |
 | FR-OIDC-006, 010, 014, D-06, FR-TEN-009 | `tenant_oidc_configurations`, 설정 행 잠금·`user_sessions` 직접 종료·미완료 트랜잭션/티켓 삭제(5.4절) |
 | FR-OIDC-007, 008, 012 | `auth_sessions` |
 | FR-OIDC-013, 015~018, 017-01 | `user_sessions.tenant_id`, `identity_id`, `end_reason`, `session_bindings` |
@@ -836,7 +819,7 @@ erDiagram
 2. **리비전 0001 하나로 전체 생성**: ORM 모델에서 autogenerate하고 다음을 손으로 확인한다.
    - 부분 UNIQUE 인덱스(`postgresql_where`)와 설계한 CHECK가 빠짐없이 들어갔는지. 1장의 CHECK 제외 테이블에는 CHECK가 생성되지 않았는지
    - 이름: 현재 `naming_convention`은 첫 열 이름만 쓴다. 그래서 여러 열 인덱스·UNIQUE와 모든 CHECK는 이 문서의 이름을 명시한다. 예를 들어 `tenant_memberships`의 (`tenant_id`, `membership_status`) 인덱스는 이름을 주지 않으면 `ix_tenant_memberships_tenant_id`가 된다.
-   - 테이블 생성 순서(FK 의존): `users` → `user_securities`, `email_verification_tokens` → `tenants` → `applications` → `tenant_oidc_configurations` → `user_identities` → `tenant_memberships` → `tenant_applications` → `user_sessions` → `session_bindings` → `client_sessions` → `refresh_tokens` → `browser_sessions` → `auth_sessions` → `identity_link_tokens` → `authorization_codes` → `signing_keys`, `idempotency_keys`, `security_change_events`, `audit_logs`
+   - 테이블 생성 순서(FK 의존): `users` → `user_securities`, `email_verification_tokens` → `tenants` → `applications` → `tenant_oidc_configurations` → `user_identities` → `tenant_memberships` → `tenant_applications` → `user_sessions` → `session_bindings` → `client_sessions` → `refresh_tokens` → `auth_sessions` → `authorization_codes` → `signing_keys`, `idempotency_keys`, `security_change_events`, `audit_logs`
 3. **권한**: 기본 권한으로 `passport_user`가 DML을 받는다. 0001에서 `REVOKE UPDATE ON audit_logs FROM passport_user`를 실행한다(추가만 가능, 삭제는 보존 기간 작업용으로 남김). 시퀀스는 쓰지 않는다(UUID PK).
 4. **초기 데이터**: 마이그레이션에 넣지 않는다. 플랫폼 관리자는 설치 CLI가 지정하고, 첫 서명 키는 시작 시 또는 CLI로 만든다.
 5. **검증**:
@@ -853,6 +836,8 @@ erDiagram
    - OIDC 첫 로그인 시 일반 구성원 자동 추가·동시 로그인 중복 방지·실패 시 계정/소속/로그인 변경의 원자적 롤백, 기존 활성 소속 유지·해지/비활성 소속의 자동 복구 거부, 신원 연결·재인증·토큰 발급/갱신 시 소속 불변을 검증한다.
    - 관리자에 의한 기존 사용자 추가의 즉시 활성화·멱등 재시도와 존재하지 않는 사용자·중복 소속·해지 이력의 추가 거부를 검증한다.
    - 다른 브라우저 콜백 거부, 외부 세션·토큰별 종료 범위를 검증한다.
+   - `client_sessions`의 브라우저 필드 조합, 비포털 계열의 NULL, 계열 잠금 아래 토큰 회전·보관 토큰 교체의 원자성, 종료·계열 폐기·복원 시 브라우저 필드 정리와 토큰 이력 보존을 검증한다.
+   - `auth_sessions`의 콜백·티켓 일회성 소비와 별도 만료, 콜백 만료 후 유효한 티켓의 처리·보존, 동일 콜백의 티켓 재발급 거부, 신원 삽입 실패 시 티켓 소비 롤백, `link`의 원 로그인 일치와 `login` 충돌 후 기존 계정 연결을 검증한다.
    - 신뢰 설정 변경 시 기존 로그인·토큰 거부, 미완료 OIDC 트랜잭션·미사용 연결 티켓 취소, 시작·콜백·티켓 소비와 설정 변경의 경합 양쪽 커밋 순서, 표시명 변경 시 기존 로그인·흐름 유지를 검증한다.
    - 변경 완료 후 기존 허용 캐시·토큰으로 접근 불가, DB 장애 시 검증 실패와 로그인 유지, 탈퇴 후 서버의 미완료 외부 확인 재처리, 외부 기록의 커밋 전·후 실패와 복원 재적용을 통합 검증한다.
 
