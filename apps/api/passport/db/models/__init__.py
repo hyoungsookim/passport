@@ -5,6 +5,7 @@ from passport.db.models.application import (
     ApplicationStatus,
     TenantApplication,
 )
+from passport.db.models.auth_flow import AuthorizationCode, AuthSession, OidcIntent
 from passport.db.models.tenant import (
     MembershipRemovalReason,
     MembershipStatus,
@@ -26,19 +27,45 @@ from passport.db.models.user import (
     UserSecurity,
     UserStatus,
 )
+from passport.db.models.user_session import (
+    AuthenticationMethod,
+    ClientSession,
+    ClientType,
+    LoginEndReason,
+    OidcBindingKind,
+    ReauthenticationMethod,
+    RefreshToken,
+    SessionBinding,
+    SigningAlgorithm,
+    SigningKey,
+    UserSession,
+)
 
 __all__ = [
     "Application",
     "ApplicationStatus",
+    "AuthSession",
+    "AuthenticationMethod",
+    "AuthorizationCode",
+    "ClientSession",
+    "ClientType",
     "EmailVerificationToken",
     "Identity",
+    "LoginEndReason",
     "MembershipRemovalReason",
     "MembershipStatus",
+    "OidcBindingKind",
     "OidcConfigurationStatus",
+    "OidcIntent",
     "OidcProviderType",
     "OidcValidationError",
     "OidcValidationStatus",
     "PasswordAlgorithm",
+    "ReauthenticationMethod",
+    "RefreshToken",
+    "SessionBinding",
+    "SigningAlgorithm",
+    "SigningKey",
     "Tenant",
     "TenantApplication",
     "TenantMembership",
@@ -47,5 +74,6 @@ __all__ = [
     "TenantStatus",
     "User",
     "UserSecurity",
+    "UserSession",
     "UserStatus",
 ]

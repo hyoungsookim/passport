@@ -6,15 +6,28 @@ from passport.db.base import Base, IntEnumType
 from passport.db.models import (
     Application,
     ApplicationStatus,
+    AuthenticationMethod,
+    AuthorizationCode,
+    AuthSession,
+    ClientSession,
+    ClientType,
     EmailVerificationToken,
     Identity,
+    LoginEndReason,
     MembershipRemovalReason,
     MembershipStatus,
+    OidcBindingKind,
     OidcConfigurationStatus,
+    OidcIntent,
     OidcProviderType,
     OidcValidationError,
     OidcValidationStatus,
     PasswordAlgorithm,
+    ReauthenticationMethod,
+    RefreshToken,
+    SessionBinding,
+    SigningAlgorithm,
+    SigningKey,
     Tenant,
     TenantApplication,
     TenantMembership,
@@ -23,6 +36,7 @@ from passport.db.models import (
     TenantStatus,
     User,
     UserSecurity,
+    UserSession,
     UserStatus,
 )
 
@@ -65,6 +79,27 @@ def ddl(model):
         (MembershipStatus, {"ACTIVE": 2, "SUSPENDED": 3, "REMOVED": 4}),
         (MembershipRemovalReason, {"ADMIN_REMOVED": 1}),
         (ApplicationStatus, {"ACTIVE": 1, "INACTIVE": 2}),
+        (AuthenticationMethod, {"LOCAL": 1, "OIDC": 2}),
+        (ClientType, {"WEB": 1, "NATIVE": 2}),
+        (ReauthenticationMethod, {"PASSWORD": 1, "OIDC": 2}),
+        (
+            LoginEndReason,
+            {
+                "LOGOUT": 1,
+                "LOGOUT_ALL": 2,
+                "PASSWORD_CHANGED": 3,
+                "ACCOUNT_INACTIVE": 4,
+                "REFRESH_REUSE": 5,
+                "OIDC_TRUST_CHANGED": 6,
+                "EXTERNAL_ACCOUNT_BLOCKED": 7,
+                "PROVIDER_LOGOUT": 8,
+                "EXTERNAL_TOKEN_REVOKED": 9,
+                "RESTORE": 11,
+            },
+        ),
+        (OidcBindingKind, {"SESSION": 1, "TOKEN": 2}),
+        (SigningAlgorithm, {"ES256": 1}),
+        (OidcIntent, {"LOGIN": 1, "LINK": 2, "REAUTH": 3}),
     ],
 )
 def test_enum_keys_match_db_model(enum, keys):
@@ -258,8 +293,6 @@ def test_applications_ddl():
         "external_id VARCHAR(50), "
         "external_source VARCHAR(50), "
         "CONSTRAINT pk_applications PRIMARY KEY (application_id), "
-        "CONSTRAINT ck_applications_application_status_enum "
-        "CHECK (application_status IN (1, 2)), "
         "CONSTRAINT ck_applications_application_code "
         "CHECK (application_code ~ '^[a-z][a-z0-9-]{1,30}[a-z0-9]$' "
         "AND application_code <> 'passport'), "
@@ -279,8 +312,6 @@ def test_tenant_applications_ddl():
         "created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, "
         "created_by UUID NOT NULL, "
         "CONSTRAINT pk_tenant_applications PRIMARY KEY (tenant_id, application_id), "
-        "CONSTRAINT ck_tenant_applications_application_status_enum "
-        "CHECK (application_status IN (1, 2)), "
         "CONSTRAINT fk_tenant_applications_tenant_id_tenants FOREIGN KEY(tenant_id) "
         "REFERENCES tenants (tenant_id) ON DELETE RESTRICT, "
         "CONSTRAINT fk_tenant_applications_application_id_applications "
@@ -288,4 +319,210 @@ def test_tenant_applications_ddl():
         "ON DELETE RESTRICT ) ; "
         "CREATE INDEX ix_tenant_applications_application_id "
         "ON tenant_applications (application_id)"
+    )
+
+
+def test_user_sessions_ddl():
+    assert ddl(UserSession) == (
+        "CREATE TABLE user_sessions ( "
+        "user_session_id UUID NOT NULL, "
+        "user_id UUID NOT NULL, "
+        "auth_method SMALLINT NOT NULL, "
+        "client_type SMALLINT NOT NULL, "
+        "authenticated_at TIMESTAMP WITH TIME ZONE NOT NULL, "
+        "expires_at TIMESTAMP WITH TIME ZONE NOT NULL, "
+        "last_activity_at TIMESTAMP WITH TIME ZONE NOT NULL, "
+        "tenant_id UUID, "
+        "config_id UUID, "
+        "identity_id UUID, "
+        "reauthenticated_at TIMESTAMP WITH TIME ZONE NOT NULL, "
+        "reauth_method SMALLINT NOT NULL, "
+        "ended_at TIMESTAMP WITH TIME ZONE, "
+        "end_reason SMALLINT, "
+        "created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, "
+        "CONSTRAINT pk_user_sessions PRIMARY KEY (user_session_id), "
+        "CONSTRAINT ck_user_sessions_oidc "
+        "CHECK (auth_method = 1 OR (tenant_id IS NOT NULL AND config_id IS NOT NULL)), "
+        "CONSTRAINT fk_user_sessions_user_id_users FOREIGN KEY(user_id) "
+        "REFERENCES users (user_id) ON DELETE CASCADE, "
+        "CONSTRAINT fk_user_sessions_tenant_id_tenants FOREIGN KEY(tenant_id) "
+        "REFERENCES tenants (tenant_id) ON DELETE RESTRICT, "
+        "CONSTRAINT fk_user_sessions_config_id_tenant_oidc_configurations "
+        "FOREIGN KEY(config_id) REFERENCES tenant_oidc_configurations (config_id) "
+        "ON DELETE RESTRICT, "
+        "CONSTRAINT fk_user_sessions_identity_id_user_identities "
+        "FOREIGN KEY(identity_id) REFERENCES user_identities (identity_id) "
+        "ON DELETE CASCADE ) ; "
+        "CREATE INDEX ix_user_sessions_config_id ON user_sessions (config_id) "
+        "WHERE ended_at IS NULL ; "
+        "CREATE INDEX ix_user_sessions_expires_at ON user_sessions (expires_at) ; "
+        "CREATE INDEX ix_user_sessions_identity_id ON user_sessions (identity_id) "
+        "WHERE ended_at IS NULL ; "
+        "CREATE INDEX ix_user_sessions_user_id ON user_sessions (user_id) "
+        "WHERE ended_at IS NULL"
+    )
+
+
+def test_session_bindings_ddl():
+    assert ddl(SessionBinding) == (
+        "CREATE TABLE session_bindings ( "
+        "user_session_id UUID NOT NULL, "
+        "binding_kind SMALLINT NOT NULL, "
+        "binding_hash BYTEA NOT NULL, "
+        "created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, "
+        "CONSTRAINT pk_session_bindings "
+        "PRIMARY KEY (user_session_id, binding_kind, binding_hash), "
+        "CONSTRAINT ck_session_bindings_hash CHECK (octet_length(binding_hash) = 32), "
+        "CONSTRAINT fk_session_bindings_user_session_id_user_sessions "
+        "FOREIGN KEY(user_session_id) REFERENCES user_sessions (user_session_id) "
+        "ON DELETE CASCADE ) ; "
+        "CREATE INDEX ix_session_bindings_binding_kind_binding_hash "
+        "ON session_bindings (binding_kind, binding_hash)"
+    )
+
+
+def test_client_sessions_ddl():
+    assert ddl(ClientSession) == (
+        "CREATE TABLE client_sessions ( "
+        "client_session_id UUID NOT NULL, "
+        "user_session_id UUID NOT NULL, "
+        "client_id VARCHAR(32) NOT NULL, "
+        "revoked_at TIMESTAMP WITH TIME ZONE, "
+        "sesstion_id UUID, "
+        "session_hash BYTEA, "
+        "refresh_token_ciphertext BYTEA, "
+        "tenant_id UUID, "
+        "access_token_ciphertext BYTEA, "
+        "access_token_expires_at TIMESTAMP WITH TIME ZONE, "
+        "created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, "
+        "updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, "
+        "CONSTRAINT pk_client_sessions PRIMARY KEY (client_session_id), "
+        "CONSTRAINT ck_client_sessions_browser CHECK ("
+        "(session_hash IS NULL AND sesstion_id IS NULL "
+        "AND refresh_token_ciphertext IS NULL AND tenant_id IS NULL "
+        "AND access_token_ciphertext IS NULL AND access_token_expires_at IS NULL) "
+        "OR (session_hash IS NOT NULL AND sesstion_id IS NOT NULL "
+        "AND refresh_token_ciphertext IS NOT NULL "
+        "AND client_id = 'passport-portal' AND revoked_at IS NULL)), "
+        "CONSTRAINT ck_client_sessions_access_token "
+        "CHECK ((access_token_ciphertext IS NULL) = "
+        "(access_token_expires_at IS NULL)), "
+        "CONSTRAINT fk_client_sessions_user_session_id_user_sessions "
+        "FOREIGN KEY(user_session_id) REFERENCES user_sessions (user_session_id) "
+        "ON DELETE CASCADE, "
+        "CONSTRAINT uq_client_sessions_sesstion_id UNIQUE (sesstion_id), "
+        "CONSTRAINT uq_client_sessions_session_hash UNIQUE (session_hash), "
+        "CONSTRAINT fk_client_sessions_tenant_id_tenants FOREIGN KEY(tenant_id) "
+        "REFERENCES tenants (tenant_id) ON DELETE RESTRICT ) ; "
+        "CREATE INDEX ix_client_sessions_user_session_id "
+        "ON client_sessions (user_session_id)"
+    )
+
+
+def test_refresh_tokens_ddl():
+    assert ddl(RefreshToken) == (
+        "CREATE TABLE refresh_tokens ( "
+        "id UUID NOT NULL, "
+        "family_id UUID NOT NULL, "
+        "token_hash BYTEA NOT NULL, "
+        "issued_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, "
+        "rotated_at TIMESTAMP WITH TIME ZONE, "
+        "CONSTRAINT pk_refresh_tokens PRIMARY KEY (id), "
+        "CONSTRAINT fk_refresh_tokens_family_id_client_sessions "
+        "FOREIGN KEY(family_id) REFERENCES client_sessions (client_session_id) "
+        "ON DELETE CASCADE, "
+        "CONSTRAINT uq_refresh_tokens_token_hash UNIQUE (token_hash) ) ; "
+        "CREATE UNIQUE INDEX uq_refresh_tokens_active ON refresh_tokens (family_id) "
+        "WHERE rotated_at IS NULL"
+    )
+
+
+def test_signing_keys_ddl():
+    assert ddl(SigningKey) == (
+        "CREATE TABLE signing_keys ( "
+        "kid VARCHAR(64) NOT NULL, "
+        "alg SMALLINT DEFAULT 1 NOT NULL, "
+        "public_jwk JSONB NOT NULL, "
+        "private_key_ciphertext BYTEA NOT NULL, "
+        "activates_at TIMESTAMP WITH TIME ZONE NOT NULL, "
+        "retires_at TIMESTAMP WITH TIME ZONE NOT NULL, "
+        "expires_at TIMESTAMP WITH TIME ZONE NOT NULL, "
+        "revoked_at TIMESTAMP WITH TIME ZONE, "
+        "created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, "
+        "CONSTRAINT pk_signing_keys PRIMARY KEY (kid) )"
+    )
+
+
+def test_auth_sessions_ddl():
+    assert ddl(AuthSession) == (
+        "CREATE TABLE auth_sessions ( "
+        "auth_session_id UUID NOT NULL, "
+        "state_hash BYTEA NOT NULL, "
+        "browser_binding_hash BYTEA NOT NULL, "
+        "nonce_hash BYTEA NOT NULL, "
+        "pkce_verifier_ciphertext BYTEA NOT NULL, "
+        "tenant_id UUID NOT NULL, "
+        "config_id UUID NOT NULL, "
+        "intent SMALLINT NOT NULL, "
+        "return_to VARCHAR(2048) NOT NULL, "
+        "user_session_id UUID, "
+        "expires_at TIMESTAMP WITH TIME ZONE NOT NULL, "
+        "consumed_at TIMESTAMP WITH TIME ZONE, "
+        "ticket_hash BYTEA, "
+        "issuer VARCHAR(2048), "
+        "subject VARCHAR(255), "
+        "ticket_issued_at TIMESTAMP WITH TIME ZONE, "
+        "ticket_expires_at TIMESTAMP WITH TIME ZONE, "
+        "ticket_consumed_at TIMESTAMP WITH TIME ZONE, "
+        "created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, "
+        "CONSTRAINT pk_auth_sessions PRIMARY KEY (auth_session_id), "
+        "CONSTRAINT ck_auth_sessions_browser_binding_hash "
+        "CHECK (octet_length(browser_binding_hash) = 32), "
+        "CONSTRAINT ck_auth_sessions_intent "
+        "CHECK ((intent = 1) = (user_session_id IS NULL)), "
+        "CONSTRAINT ck_auth_sessions_ticket CHECK ("
+        "(ticket_hash IS NULL AND issuer IS NULL AND subject IS NULL "
+        "AND ticket_issued_at IS NULL AND ticket_expires_at IS NULL "
+        "AND ticket_consumed_at IS NULL) "
+        "OR (ticket_hash IS NOT NULL AND issuer IS NOT NULL "
+        "AND subject IS NOT NULL AND ticket_issued_at IS NOT NULL "
+        "AND ticket_expires_at IS NOT NULL AND consumed_at IS NOT NULL "
+        "AND intent IN (1, 2))), "
+        "CONSTRAINT uq_auth_sessions_state_hash UNIQUE (state_hash), "
+        "CONSTRAINT fk_auth_sessions_tenant_id_tenants FOREIGN KEY(tenant_id) "
+        "REFERENCES tenants (tenant_id) ON DELETE RESTRICT, "
+        "CONSTRAINT fk_auth_sessions_config_id_tenant_oidc_configurations "
+        "FOREIGN KEY(config_id) REFERENCES tenant_oidc_configurations (config_id) "
+        "ON DELETE RESTRICT, "
+        "CONSTRAINT fk_auth_sessions_user_session_id_user_sessions "
+        "FOREIGN KEY(user_session_id) REFERENCES user_sessions (user_session_id) "
+        "ON DELETE CASCADE, "
+        "CONSTRAINT uq_auth_sessions_ticket_hash UNIQUE (ticket_hash) )"
+    )
+
+
+def test_authorization_codes_ddl():
+    assert ddl(AuthorizationCode) == (
+        "CREATE TABLE authorization_codes ( "
+        "id UUID NOT NULL, "
+        "code_hash BYTEA NOT NULL, "
+        "client_id VARCHAR(32) NOT NULL, "
+        "redirect_uri VARCHAR(2048) NOT NULL, "
+        "user_session_id UUID NOT NULL, "
+        "tenant_id UUID NOT NULL, "
+        "code_challenge VARCHAR(128) NOT NULL, "
+        "expires_at TIMESTAMP WITH TIME ZONE NOT NULL, "
+        "consumed_at TIMESTAMP WITH TIME ZONE, "
+        "refresh_family_id UUID, "
+        "created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, "
+        "CONSTRAINT pk_authorization_codes PRIMARY KEY (id), "
+        "CONSTRAINT uq_authorization_codes_code_hash UNIQUE (code_hash), "
+        "CONSTRAINT fk_authorization_codes_user_session_id_user_sessions "
+        "FOREIGN KEY(user_session_id) REFERENCES user_sessions (user_session_id) "
+        "ON DELETE CASCADE, "
+        "CONSTRAINT fk_authorization_codes_tenant_id_tenants FOREIGN KEY(tenant_id) "
+        "REFERENCES tenants (tenant_id) ON DELETE RESTRICT, "
+        "CONSTRAINT fk_authorization_codes_refresh_family_id_client_sessions "
+        "FOREIGN KEY(refresh_family_id) REFERENCES client_sessions "
+        "(client_session_id) ON DELETE CASCADE )"
     )

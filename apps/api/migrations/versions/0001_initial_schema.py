@@ -10,6 +10,7 @@ from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision: str = "0001"
@@ -72,10 +73,6 @@ def upgrade() -> None:
         sa.CheckConstraint(
             "(previous_client_secret_hash IS NULL) = (previous_secret_valid_until IS NULL)",
             name=op.f("ck_applications_previous_secret"),
-        ),
-        sa.CheckConstraint(
-            "application_status IN (1, 2)",
-            name=op.f("ck_applications_application_status_enum"),
         ),
         sa.PrimaryKeyConstraint("application_id", name=op.f("pk_applications")),
         sa.UniqueConstraint(
@@ -190,10 +187,6 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.Column("created_by", sa.Uuid(), nullable=False),
-        sa.CheckConstraint(
-            "application_status IN (1, 2)",
-            name=op.f("ck_tenant_applications_application_status_enum"),
-        ),
         sa.ForeignKeyConstraint(
             ["application_id"],
             ["applications.application_id"],
@@ -403,12 +396,363 @@ def upgrade() -> None:
     op.create_index(
         op.f("ix_user_identities_user_id"), "user_identities", ["user_id"], unique=False
     )
+    op.create_table(
+        "signing_keys",
+        sa.Column("kid", sa.String(length=64), nullable=False),
+        sa.Column(
+            "alg", sa.SmallInteger(), server_default=sa.text("1"), nullable=False
+        ),
+        sa.Column(
+            "public_jwk", postgresql.JSONB(astext_type=sa.Text()), nullable=False
+        ),
+        sa.Column("private_key_ciphertext", sa.LargeBinary(), nullable=False),
+        sa.Column("activates_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("retires_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("revoked_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.PrimaryKeyConstraint("kid", name=op.f("pk_signing_keys")),
+    )
+    op.create_table(
+        "user_sessions",
+        sa.Column("user_session_id", sa.Uuid(), nullable=False),
+        sa.Column("user_id", sa.Uuid(), nullable=False),
+        sa.Column("auth_method", sa.SmallInteger(), nullable=False),
+        sa.Column("client_type", sa.SmallInteger(), nullable=False),
+        sa.Column("authenticated_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("last_activity_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("tenant_id", sa.Uuid(), nullable=True),
+        sa.Column("config_id", sa.Uuid(), nullable=True),
+        sa.Column("identity_id", sa.Uuid(), nullable=True),
+        sa.Column("reauthenticated_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("reauth_method", sa.SmallInteger(), nullable=False),
+        sa.Column("ended_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("end_reason", sa.SmallInteger(), nullable=True),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.CheckConstraint(
+            "auth_method = 1 OR (tenant_id IS NOT NULL AND config_id IS NOT NULL)",
+            name=op.f("ck_user_sessions_oidc"),
+        ),
+        sa.ForeignKeyConstraint(
+            ["config_id"],
+            ["tenant_oidc_configurations.config_id"],
+            name=op.f("fk_user_sessions_config_id_tenant_oidc_configurations"),
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            ["identity_id"],
+            ["user_identities.identity_id"],
+            name=op.f("fk_user_sessions_identity_id_user_identities"),
+            ondelete="CASCADE",
+        ),
+        sa.ForeignKeyConstraint(
+            ["tenant_id"],
+            ["tenants.tenant_id"],
+            name=op.f("fk_user_sessions_tenant_id_tenants"),
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            ["user_id"],
+            ["users.user_id"],
+            name=op.f("fk_user_sessions_user_id_users"),
+            ondelete="CASCADE",
+        ),
+        sa.PrimaryKeyConstraint("user_session_id", name=op.f("pk_user_sessions")),
+    )
+    op.create_index(
+        "ix_user_sessions_config_id",
+        "user_sessions",
+        ["config_id"],
+        unique=False,
+        postgresql_where=sa.text("ended_at IS NULL"),
+    )
+    op.create_index(
+        op.f("ix_user_sessions_expires_at"),
+        "user_sessions",
+        ["expires_at"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_user_sessions_identity_id",
+        "user_sessions",
+        ["identity_id"],
+        unique=False,
+        postgresql_where=sa.text("ended_at IS NULL"),
+    )
+    op.create_index(
+        "ix_user_sessions_user_id",
+        "user_sessions",
+        ["user_id"],
+        unique=False,
+        postgresql_where=sa.text("ended_at IS NULL"),
+    )
+    op.create_table(
+        "auth_sessions",
+        sa.Column("auth_session_id", sa.Uuid(), nullable=False),
+        sa.Column("state_hash", sa.LargeBinary(), nullable=False),
+        sa.Column("browser_binding_hash", sa.LargeBinary(), nullable=False),
+        sa.Column("nonce_hash", sa.LargeBinary(), nullable=False),
+        sa.Column("pkce_verifier_ciphertext", sa.LargeBinary(), nullable=False),
+        sa.Column("tenant_id", sa.Uuid(), nullable=False),
+        sa.Column("config_id", sa.Uuid(), nullable=False),
+        sa.Column("intent", sa.SmallInteger(), nullable=False),
+        sa.Column("return_to", sa.String(length=2048), nullable=False),
+        sa.Column("user_session_id", sa.Uuid(), nullable=True),
+        sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("consumed_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("ticket_hash", sa.LargeBinary(), nullable=True),
+        sa.Column("issuer", sa.String(length=2048), nullable=True),
+        sa.Column("subject", sa.String(length=255), nullable=True),
+        sa.Column("ticket_issued_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("ticket_expires_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("ticket_consumed_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.CheckConstraint(
+            "(intent = 1) = (user_session_id IS NULL)",
+            name=op.f("ck_auth_sessions_intent"),
+        ),
+        sa.CheckConstraint(
+            "(ticket_hash IS NULL AND issuer IS NULL AND subject IS NULL AND ticket_issued_at IS NULL AND ticket_expires_at IS NULL AND ticket_consumed_at IS NULL) OR (ticket_hash IS NOT NULL AND issuer IS NOT NULL AND subject IS NOT NULL AND ticket_issued_at IS NOT NULL AND ticket_expires_at IS NOT NULL AND consumed_at IS NOT NULL AND intent IN (1, 2))",
+            name=op.f("ck_auth_sessions_ticket"),
+        ),
+        sa.CheckConstraint(
+            "octet_length(browser_binding_hash) = 32",
+            name=op.f("ck_auth_sessions_browser_binding_hash"),
+        ),
+        sa.ForeignKeyConstraint(
+            ["config_id"],
+            ["tenant_oidc_configurations.config_id"],
+            name=op.f("fk_auth_sessions_config_id_tenant_oidc_configurations"),
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            ["tenant_id"],
+            ["tenants.tenant_id"],
+            name=op.f("fk_auth_sessions_tenant_id_tenants"),
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            ["user_session_id"],
+            ["user_sessions.user_session_id"],
+            name=op.f("fk_auth_sessions_user_session_id_user_sessions"),
+            ondelete="CASCADE",
+        ),
+        sa.PrimaryKeyConstraint("auth_session_id", name=op.f("pk_auth_sessions")),
+        sa.UniqueConstraint("state_hash", name=op.f("uq_auth_sessions_state_hash")),
+        sa.UniqueConstraint("ticket_hash", name=op.f("uq_auth_sessions_ticket_hash")),
+    )
+    op.create_table(
+        "client_sessions",
+        sa.Column("client_session_id", sa.Uuid(), nullable=False),
+        sa.Column("user_session_id", sa.Uuid(), nullable=False),
+        sa.Column("client_id", sa.String(length=32), nullable=False),
+        sa.Column("revoked_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("sesstion_id", sa.Uuid(), nullable=True),
+        sa.Column("session_hash", sa.LargeBinary(), nullable=True),
+        sa.Column("refresh_token_ciphertext", sa.LargeBinary(), nullable=True),
+        sa.Column("tenant_id", sa.Uuid(), nullable=True),
+        sa.Column("access_token_ciphertext", sa.LargeBinary(), nullable=True),
+        sa.Column("access_token_expires_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.CheckConstraint(
+            "(session_hash IS NULL AND sesstion_id IS NULL AND refresh_token_ciphertext IS NULL AND tenant_id IS NULL AND access_token_ciphertext IS NULL AND access_token_expires_at IS NULL) OR (session_hash IS NOT NULL AND sesstion_id IS NOT NULL AND refresh_token_ciphertext IS NOT NULL AND client_id = 'passport-portal' AND revoked_at IS NULL)",
+            name=op.f("ck_client_sessions_browser"),
+        ),
+        sa.CheckConstraint(
+            "(access_token_ciphertext IS NULL) = (access_token_expires_at IS NULL)",
+            name=op.f("ck_client_sessions_access_token"),
+        ),
+        sa.ForeignKeyConstraint(
+            ["tenant_id"],
+            ["tenants.tenant_id"],
+            name=op.f("fk_client_sessions_tenant_id_tenants"),
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            ["user_session_id"],
+            ["user_sessions.user_session_id"],
+            name=op.f("fk_client_sessions_user_session_id_user_sessions"),
+            ondelete="CASCADE",
+        ),
+        sa.PrimaryKeyConstraint("client_session_id", name=op.f("pk_client_sessions")),
+        sa.UniqueConstraint(
+            "session_hash", name=op.f("uq_client_sessions_session_hash")
+        ),
+        sa.UniqueConstraint("sesstion_id", name=op.f("uq_client_sessions_sesstion_id")),
+    )
+    op.create_index(
+        op.f("ix_client_sessions_user_session_id"),
+        "client_sessions",
+        ["user_session_id"],
+        unique=False,
+    )
+    op.create_table(
+        "session_bindings",
+        sa.Column("user_session_id", sa.Uuid(), nullable=False),
+        sa.Column("binding_kind", sa.SmallInteger(), nullable=False),
+        sa.Column("binding_hash", sa.LargeBinary(), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.CheckConstraint(
+            "octet_length(binding_hash) = 32", name=op.f("ck_session_bindings_hash")
+        ),
+        sa.ForeignKeyConstraint(
+            ["user_session_id"],
+            ["user_sessions.user_session_id"],
+            name=op.f("fk_session_bindings_user_session_id_user_sessions"),
+            ondelete="CASCADE",
+        ),
+        sa.PrimaryKeyConstraint(
+            "user_session_id",
+            "binding_kind",
+            "binding_hash",
+            name=op.f("pk_session_bindings"),
+        ),
+    )
+    op.create_index(
+        "ix_session_bindings_binding_kind_binding_hash",
+        "session_bindings",
+        ["binding_kind", "binding_hash"],
+        unique=False,
+    )
+    op.create_table(
+        "authorization_codes",
+        sa.Column("id", sa.Uuid(), nullable=False),
+        sa.Column("code_hash", sa.LargeBinary(), nullable=False),
+        sa.Column("client_id", sa.String(length=32), nullable=False),
+        sa.Column("redirect_uri", sa.String(length=2048), nullable=False),
+        sa.Column("user_session_id", sa.Uuid(), nullable=False),
+        sa.Column("tenant_id", sa.Uuid(), nullable=False),
+        sa.Column("code_challenge", sa.String(length=128), nullable=False),
+        sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("consumed_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("refresh_family_id", sa.Uuid(), nullable=True),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.ForeignKeyConstraint(
+            ["refresh_family_id"],
+            ["client_sessions.client_session_id"],
+            name=op.f("fk_authorization_codes_refresh_family_id_client_sessions"),
+            ondelete="CASCADE",
+        ),
+        sa.ForeignKeyConstraint(
+            ["tenant_id"],
+            ["tenants.tenant_id"],
+            name=op.f("fk_authorization_codes_tenant_id_tenants"),
+            ondelete="RESTRICT",
+        ),
+        sa.ForeignKeyConstraint(
+            ["user_session_id"],
+            ["user_sessions.user_session_id"],
+            name=op.f("fk_authorization_codes_user_session_id_user_sessions"),
+            ondelete="CASCADE",
+        ),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_authorization_codes")),
+        sa.UniqueConstraint("code_hash", name=op.f("uq_authorization_codes_code_hash")),
+    )
+    op.create_table(
+        "refresh_tokens",
+        sa.Column("id", sa.Uuid(), nullable=False),
+        sa.Column("family_id", sa.Uuid(), nullable=False),
+        sa.Column("token_hash", sa.LargeBinary(), nullable=False),
+        sa.Column(
+            "issued_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column("rotated_at", sa.DateTime(timezone=True), nullable=True),
+        sa.ForeignKeyConstraint(
+            ["family_id"],
+            ["client_sessions.client_session_id"],
+            name=op.f("fk_refresh_tokens_family_id_client_sessions"),
+            ondelete="CASCADE",
+        ),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_refresh_tokens")),
+        sa.UniqueConstraint("token_hash", name=op.f("uq_refresh_tokens_token_hash")),
+    )
+    op.create_index(
+        "uq_refresh_tokens_active",
+        "refresh_tokens",
+        ["family_id"],
+        unique=True,
+        postgresql_where=sa.text("rotated_at IS NULL"),
+    )
     # ### end Alembic commands ###
 
 
 def downgrade() -> None:
     """Downgrade schema."""
     # ### commands auto generated by Alembic - please adjust! ###
+    op.drop_index(
+        "uq_refresh_tokens_active",
+        table_name="refresh_tokens",
+        postgresql_where=sa.text("rotated_at IS NULL"),
+    )
+    op.drop_table("refresh_tokens")
+    op.drop_table("authorization_codes")
+    op.drop_index(
+        "ix_session_bindings_binding_kind_binding_hash", table_name="session_bindings"
+    )
+    op.drop_table("session_bindings")
+    op.drop_index(
+        op.f("ix_client_sessions_user_session_id"), table_name="client_sessions"
+    )
+    op.drop_table("client_sessions")
+    op.drop_table("auth_sessions")
+    op.drop_index(
+        "ix_user_sessions_user_id",
+        table_name="user_sessions",
+        postgresql_where=sa.text("ended_at IS NULL"),
+    )
+    op.drop_index(
+        "ix_user_sessions_identity_id",
+        table_name="user_sessions",
+        postgresql_where=sa.text("ended_at IS NULL"),
+    )
+    op.drop_index(op.f("ix_user_sessions_expires_at"), table_name="user_sessions")
+    op.drop_index(
+        "ix_user_sessions_config_id",
+        table_name="user_sessions",
+        postgresql_where=sa.text("ended_at IS NULL"),
+    )
+    op.drop_table("user_sessions")
+    op.drop_table("signing_keys")
     op.drop_index(op.f("ix_user_identities_user_id"), table_name="user_identities")
     op.drop_table("user_identities")
     op.drop_table("user_securities")

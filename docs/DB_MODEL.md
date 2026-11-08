@@ -395,7 +395,6 @@ erDiagram
 | `created_at` | timestamptz | | `now()` | |
 
 - CHECK `ck_user_sessions_oidc`: `auth_method = 1 OR (tenant_id IS NOT NULL AND config_id IS NOT NULL)`
-- CHECK `ck_user_sessions_ended`: `(ended_at IS NULL) = (end_reason IS NULL)`
 - 부분 인덱스 `WHERE ended_at IS NULL`: `user_id`(전체 로그아웃·계정 차단), `config_id`(신뢰 변경), `identity_id`(외부 계정 차단·Provider 로그아웃)
 - 인덱스 `expires_at`(정리 작업)
 - Passport API와 `verifyAccess`는 요청마다 PK로 이 행과 사용자 존재·상태를 확인한다. 사용자 또는 로그인 행이 없거나 로그인이 종료·만료되었으면 기존 토큰을 거부한다. OIDC 로그인은 현재 설정의 활성 상태도 확인하며, 신뢰 변경으로 종료된 로그인은 토큰의 남은 유효기간과 관계없이 거부한다.

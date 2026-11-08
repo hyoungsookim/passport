@@ -2,7 +2,7 @@
 
 An application is a SaaS service registered with Passport. Applications are
 shared parents and are never deleted, so FKs to them are ON DELETE RESTRICT.
-Unlike users and tenants, these tables do carry DB CHECK constraints.
+Unlike users and tenants, applications carries DB CHECK constraints.
 """
 
 import uuid
@@ -31,12 +31,6 @@ class ApplicationStatus(IntEnum):
     INACTIVE = 2
 
 
-# Both tables name the column application_status (DB_MODEL.md 1.1 enum CHECK).
-_STATUS_CHECK = (
-    f"application_status IN ({', '.join(str(s.value) for s in ApplicationStatus)})"
-)
-
-
 class Application(Base):
     """A registered SaaS application and its trusted service client.
 
@@ -53,7 +47,6 @@ class Application(Base):
 
     __tablename__ = "applications"
     __table_args__ = (
-        CheckConstraint(_STATUS_CHECK, name="application_status_enum"),
         # Contract ApplicationCode; 'passport' is reserved.
         CheckConstraint(
             "application_code ~ '^[a-z][a-z0-9-]{1,30}[a-z0-9]$' "
@@ -111,7 +104,6 @@ class TenantApplication(Base):
     """
 
     __tablename__ = "tenant_applications"
-    __table_args__ = (CheckConstraint(_STATUS_CHECK, name="application_status_enum"),)
 
     tenant_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("tenants.tenant_id", ondelete="RESTRICT"), primary_key=True
