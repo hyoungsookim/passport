@@ -30,3 +30,7 @@ build-backend = "uv_build"
 [tool.uv.build-backend]
 module-name = "passport"
 module-root = ""
+
+[tool.ruff]
+# Anchor the project root here so `passport` stays first-party when ruff runs from the repo root (IDE).
+src = ["."]
