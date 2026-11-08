@@ -25,7 +25,7 @@ info:
 
     **2026-11-02 확정 보완**: 외부 로그아웃·철회의 정확한 대상 매핑,
     독립 외부 보안 기록 영속화 후 완료 응답, 탈퇴 확인 키 24시간을 적용한다.
-    OIDC 시작·콜백은 최초 브라우저에 바인딩하며, 캐시 버전은 DB 현재 버전과 대조한다.
+    OIDC 시작·콜백은 최초 브라우저에 바인딩하며, 접근 자격은 매 요청 DB의 현재 상태로 검증한다.
 
     **인증 정책 책임:** OTP 등록·검증·복구와 MFA 정책은 OIDC Provider가 관리한다. Passport는 별도 MFA 판정·저장·전달과 `acr`·`amr` 인정 규칙을 제공하지 않는다. OIDC 토큰의 기본 검증과 민감 작업 재인증은 유지하며 Local 로그인에는 Provider의 OTP 정책이 적용되지 않는다.
 
@@ -260,28 +260,18 @@ info:
       - 같은 키에 다른 본문이 오면 `422 idempotency_key_reused`이다.
       - **[제안]** 키는 24시간 보관한다.
     - **접근 자격 변경 API**(FR-APP-008): 멤버십 추가·상태 변경·제거, 테넌트 상태 변경, TenantApplication 변경, 계정 탈퇴.
-      1. 9.4절 대상이면 외부 변경 의도 영속화를 확인한 뒤 상태 변경과 관련 `access_version` 증가를 한 DB 트랜잭션으로 커밋한다(FR-APP-008-06). 멤버 추가는 초기 버전 `1`을 기록한다. 탈퇴는 삭제할 멤버십의 직전 버전 + 1을 최종 무효화 버전으로 큐·외부 기록에 남기고 사용자 및 FK 자손을 삭제한다.
-      2. 커밋 후 최신 버전을 Valkey 검증 경로에 반영한다. 삭제한 멤버십은 큐의 최종 무효화 버전을 사용하며 사용자·멤버십 행 없이도 재시도한다. 이전 버전으로 덮어쓰지 않는다(FR-APP-008-07).
-      3. 1과 2 및 대상 작업의 외부 커밋 확인이 끝난 뒤에만 성공을 응답한다. 이 응답 이후 시작된 해당 범위의 신규 요청에는 변경 후 접근 자격을 적용하며, 자격을 회수한 경우 거부한다(FR-APP-008-01).
-      4. 2가 실패하면 `503 access_sync_pending`을 반환한다. 본문의 `db_committed: true`, `cache_synced: false`로
-         저장 완료와 반영 미완료를 구분한다. 같은 `Idempotency-Key`로 재시도하면 상태·버전을 다시 바꾸지 않고,
-         원 작업의 외부 커밋 확인과 최신 DB 상태·버전의 Valkey 반영을 마친 뒤 처음 결과를 반환한다(FR-APP-008-09).
+      1. 원 멱등 행과 관련 데이터 행을 잠그고 검증한다. 9.4절 대상이면 외부 변경 의도 영속화를 확인한 뒤 상태 변경·멱등 결과·연결 원장을 같은 DB 트랜잭션에서 커밋한다. 탈퇴는 사용자 및 모든 FK 자손을 삭제한다.
+      2. DB 커밋과 대상 작업의 외부 커밋 확인이 끝난 뒤 성공을 응답한다. 이후 시작된 요청은 현재 DB 상태로 검증하여 변경된 접근 자격을 적용한다(FR-APP-008-01/06/07).
+      3. 외부 커밋 확인 실패는 `503 security_record_pending`과 `db_committed: true`로 구분한다. 같은 `Idempotency-Key`로 재시도하면 상태를 다시 바꾸지 않고 원 작업의 외부 확인을 마친 뒤 저장된 결과를 반환한다(FR-APP-008-09).
     - **외부 보안 기록**(NFR-OPS-002-03): 탈퇴·차단·해지·접근 중지·개인정보 및 인증 수단 삭제와 대응하는
       재활성화·재부여는 `DB_MODEL.md` 9.4절을 따른다. 변경 의도를 독립 외부 저장소에 먼저 영속화하고,
-      DB 상태·버전·연결 원장을 같은 트랜잭션에서 커밋한 뒤 외부 커밋 확인과 필요한 Valkey 반영을 마쳐야 성공이다.
+      DB 상태·연결 원장을 같은 트랜잭션에서 커밋한 뒤 외부 커밋 확인을 마쳐야 성공이다.
       대상 변경 요청은 Idempotency-Key가 필수다. 실패 시 `503 security_record_pending`과 `db_committed`, `security_recorded: false`를 반환한다.
-      커밋 전 실패는 롤백하고, 커밋 후 실패는 원 작업의 외부 확인·동기화만 재시도한다. 관련 operation의 503은 이 오류도 포함한다.
+      커밋 전 실패는 롤백하고, 커밋 후 실패는 원 작업의 외부 커밋 확인만 재시도한다. 관련 operation의 503은 이 오류도 포함한다.
       복원 시 외부 기록의 누락·무결성 오류를 검증하고 삭제·차단을 재적용하기 전에는 서비스를 재개하지 않는다.
-    - **Valkey 신뢰**: 매 요청 관련 세 버전을 DB의 현재 커밋된 상태·버전과 함께 읽는다.
-      사용자·로그인·멤버십이 삭제되었으면 기존 토큰을 거부한다. SaaS·Valkey·DB 버전이 모두 같고 현재 자격이 유효한 경우에만 캐시를 `fresh`로 사용한다.
-      Valkey 값 누락·불일치·장애는 DB 검증으로 대체하고 현재 자격을 함께 반환한다(캐시 제공 시 stale, 없으면 absent). 재구축 후 정상 비교를 재개하며 DB 검증도 실패하면 503이다.
-      이전 스냅샷 복구·키 재생성·지연 쓰기도 같은 규칙으로 처리한다.
-    - **탈퇴 재시도**: 첫 요청에 `Withdrawal-Receipt`를 필수로 보내 원 사용자·멱등 키·본문 해시에 바인딩한다.
-      로그인 종료 후에는 전용 완료 경로로 이미 커밋된 원 요청의 외부 기록·Valkey 반영과 완료 응답만 재개한다.
-      삭제된 사용자·로그인 행을 조회하거나 복구하지 않고 사용자 FK 없는 원 멱등·동기화·보안 기록으로만 처리한다.
-      키는 원 DB 커밋부터 24시간 유효하고 일반 API 인증·새 탈퇴·계정 복구·정보 조회에는 사용할 수 없다.
-      원 응답 유실이나 401·503 이후에도 클라이언트에 미리 보관한 키로 완료 경로를 사용할 수 있다.
-    - 변경 응답 전에 이미 인가를 통과한 요청은 완료를 허용한다(FR-APP-008-02).
+    - **요청별 DB 검증**: 사용자·로그인·테넌트·멤버십·Application·테넌트별 서비스 이용의 현재 커밋된 상태를 매 요청 확인한다.
+      삭제·해지·중지된 대상은 이전 토큰·허용 캐시와 관계없이 거부한다. DB 검증 실패는 `503 entitlement_unverifiable`이며 기존 로그인은 유지한다.
+      SaaS는 해당 요청의 판정과 현재 `entitlement`를 사용한다. Valkey는 접근 자격 판단에 사용하지 않는다.
 
     ## 9. 오류 계약
 
@@ -318,7 +308,6 @@ info:
     | 422 | `validation_failed` | 필드 검증 실패. `errors[]` 포함 |
     | 422 | `idempotency_key_reused` | 같은 키에 다른 본문 |
     | 429 | `too_many_requests` | 속도 제한·실패 제한. `Retry-After` 포함 |
-    | 503 | `access_sync_pending` | DB 저장 완료, Valkey 반영 미완료. 같은 멱등 키로 재시도. 탈퇴는 전용 완료 경로 |
     | 503 | `security_record_pending` | 외부 보안 기록 미완료. `db_committed`로 DB 반영 여부 구분. 원 요청의 안전한 재시도 |
     | 503 | `entitlement_unverifiable` | 접근 자격 최신 상태 확인 불가. 기존 로그인은 유지(FR-APP-008-03) |
     | 503 | `idp_status_unavailable` | 외부 Provider 상태 확인 불가(FR-OIDC-016) |
@@ -412,18 +401,14 @@ info:
 
     **F-08 SaaS 요청별 접근 자격 검증 (FR-APP-008-01~05, SC-05)**
     1. SaaS 백엔드는 받은 Passport 토큰의 서명과 `aud`를 로컬에서 검증할 수 있다(JWKS).
-    2. 테넌트 범위 요청마다 `POST /service/access/verify`를 호출한다.
-       - 본문에 토큰 원문, `user_activity`, 캐시해 둔 세 버전(`tenant`, `membership`, `tenant_application`)을 담는다.
-    3. 응답의 `cache_status`에 따라 처리한다.
-       - `fresh`이면 캐시를 그대로 쓴다.
-       - `stale`이거나 `absent`이면 응답의 현재 자격으로 캐시를 교체한다.
-    4. `decision = deny`이면 `deny_reason`에 따라 401 또는 403으로 응답한다.
-    5. `503 entitlement_unverifiable`이면 요청을 거부한다. 이전 캐시로 허용하지 않는다(FR-APP-008-03).
+    2. 테넌트 범위 요청마다 `POST /service/access/verify`에 토큰 원문과 `user_activity`를 보낸다.
+    3. `decision = allow`이면 응답의 현재 `entitlement`로 해당 요청을 처리한다. `deny`이면 `deny_reason`에 따라 401 또는 403으로 거부한다.
+    4. `503 entitlement_unverifiable`이면 이전 캐시로 허용하지 않고 요청을 거부한다(FR-APP-008-03).
 
     **F-09 접근 자격 변경과 부분 실패 (FR-APP-008-06~09)**
     - 관리자가 `DELETE /sso/api/v1/tenants/{tenant_id}/members/{membership_id}`를 `Idempotency-Key`와 함께 호출한다.
       - `204`이면 완료다.
-      - `503 access_sync_pending`이면 같은 `Idempotency-Key`로 재시도한다.
+      - `503 security_record_pending`이면 같은 `Idempotency-Key`로 재시도한다.
     - 테넌트 상태 변경과 TenantApplication 변경도 같은 방식이다.
 
     **F-10 탈퇴 (SC-06, FR-USER-005)**
@@ -432,9 +417,9 @@ info:
        `Idempotency-Key`·`Withdrawal-Receipt`와 함께 호출한다.
        - 즉시 완료되며 유예와 취소는 없다.
        - 사용자와 모든 FK 자손을 같은 트랜잭션에서 물리 삭제한다. 과거 해지 멤버십·종료 로그인·토큰도 삭제하며 기존 토큰은 거부한다. 응답과 함께 SSO 세션 쿠키가 지워진다.
-       - 개인정보를 추가 보관하지 않는다. 감사로그와 사용자 FK 없는 원 탈퇴 완료 확인·동기화·복원용 기록은 개인정보 값 없이 유지한다.
+       - 개인정보를 추가 보관하지 않는다. 감사로그와 사용자 FK 없는 원 탈퇴 완료 확인·복원용 기록은 개인정보 값 없이 유지한다.
     3. 응답 유실·503 또는 세션 무효화로 원 API가 401이면 `/sso/auth/withdrawals/complete`에 같은 확인 키를 보낸다.
-       - 유효한 키로 커밋된 원 요청의 외부 기록·Valkey 반영을 재개하고, 완료 시 204를 반환한다.
+       - 유효한 키로 커밋된 원 요청의 외부 기록 확인을 재개하고, 완료 시 204를 반환한다.
        - 미커밋 요청·불명·만료 키는 동일한 404다. 키는 첫 커밋부터 24시간만 유효하고 연장하지 않는다.
        - 브라우저 완료 경로는 세션 쿠키 대신 확인 키와 자기 Origin·CSRF 헤더를 검증한다. 개인정보·계정 상태 본문은 반환하지 않는다.
 
@@ -512,7 +497,7 @@ info:
     - `Application`: `audience`(= `code`), 서비스 자격 증명 해시
     - 로그인, 클라이언트별 Refresh Token 계열, SSO 세션·서버 측 토큰 저장 참조·무효화 연계, SSO 클라이언트·허용 redirect URI·일회용 인가 코드·PKCE, OIDC 로그인 트랜잭션, 링크 티켓, 이메일 확인 토큰, 멱등 키 저장소
     - OIDC 트랜잭션의 브라우저 바인딩 해시, 검증된 외부 세션·토큰별 `oidc_login_bindings`
-    - 사용자 행·직접/간접 FK 자손의 `ON DELETE CASCADE`, 감사로그 보존, 사용자 삭제 후에도 동작하는 최종 무효화 버전 큐
+    - 사용자 행·직접/간접 FK 자손의 `ON DELETE CASCADE`, 감사로그 보존, 사용자 삭제 후에도 동작하는 완료 확인·외부 보안 기록
     - 원 탈퇴 멱등 키에 연결한 `withdrawal_receipts`(해시·24시간 만료, 사용자 FK 없음)
     - 외부 보안 저널에 연결한 `security_change_events`와 백업의 저널 기준점
 
@@ -1080,7 +1065,7 @@ paths:
       tags: [Auth]
       summary: 커밋된 탈퇴 요청의 완료 처리 재개
       description: |
-        Withdrawal-Receipt 해시로 찾은 원 탈퇴 요청의 외부 커밋 기록·Valkey 반영을 재시도하고 완료 시 204를 반환한다.
+        Withdrawal-Receipt 해시로 찾은 원 탈퇴 요청의 외부 커밋 기록을 재시도하고 완료 시 204를 반환한다.
         로그인 쿠키·Bearer는 필요 없고 수용하지 않는다. 키는 원 DB 커밋부터 24시간만 유효하며 수명을 연장하지 않는다.
         새 탈퇴를 시작하거나 계정·로그인·권한을 복구하지 않고, 개인정보·계정 상태 응답 본문도 반환하지 않는다.
         원 DB 커밋이 없거나 키가 불명·만료된 경우 동일한 404다. 본문·사용자 ID·임의 작업 인자를 받지 않는다.
@@ -1156,7 +1141,7 @@ paths:
         - `users` 행과 직접·간접 FK로 연결된 모든 자손을 같은 트랜잭션에서 물리 삭제한다. 기존 사용자 ID를 재사용하지 않는다.
         - 인증 정보·과거 해지 멤버십·종료 로그인·토큰 요청과 처리 이력을 삭제한다. 테넌트·서비스·OIDC 설정은 유지하며 접근 자격 변경의 완료 조건은 8장 규약을 따른다.
         - 개인정보를 추가 보관하지 않는다. `audit_logs`는 사용자 FK 없이 유지하고 기존 사용자 ID·탈퇴 시각·삭제 결과를 개인정보 값 없이 기록한다.
-        - 최초 요청 전에 클라이언트가 만든 Withdrawal-Receipt를 필수로 받는다. 원 사용자 ID·멱등 키·본문에 해시를 바인딩해 같은 탈퇴 트랜잭션에서 저장한다. 원 탈퇴 완료 확인·동기화·보안 기록은 사용자 FK 없이 보존하며 삭제된 사용자 프로필을 담은 기존 멱등 응답은 제거한다.
+        - 최초 요청 전에 클라이언트가 만든 Withdrawal-Receipt를 필수로 받는다. 원 사용자 ID·멱등 키·본문에 해시를 바인딩해 같은 탈퇴 트랜잭션에서 저장한다. 원 탈퇴 완료 확인·보안 기록은 사용자 FK 없이 보존하며 삭제된 사용자 프로필을 담은 기존 멱등 응답은 제거한다.
         - 로그인 종료 후 응답 유실·503이면 전용 completeWithdrawal 경로를 사용한다. 완료 키의 수명은 DB 커밋부터 24시간이다.
         - **[제안]** 어떤 테넌트의 마지막 관리자이면 `409 last_tenant_admin`이고, 해당 `tenant_ids`를 함께 반환한다(16장 2번).
       x-requirements:
@@ -1542,7 +1527,7 @@ paths:
         - 존재하지 않는 사용자는 `404 not_found`이다.
         - 같은 사용자·테넌트에 `removed`가 아닌 멤버십이 있으면 `409 already_exists`이다(FR-MEM-005).
         - 과거 해지 이력이 있으면 `409 conflict`이며, P1 재가입 신청·승인을 따른다(FR-MEM-008).
-        - 초기 `access_version = 1`과 멱등 결과·동기화 기록을 같은 트랜잭션에 저장한다. 8장 규약(`Idempotency-Key` 필수, `503 access_sync_pending`)에 따라 Valkey 반영까지 마쳐야 201이다. 재시도는 원 결과를 반환한다.
+        - 멱등 결과를 같은 DB 트랜잭션에 저장하며 `Idempotency-Key`는 필수다. DB 커밋 후 201이며 재시도는 원 결과를 반환한다.
         초대장 발송·수락·만료(FR-MEM-006)는 P1이다.
       x-requirements: [FR-MEM-001, FR-MEM-003, FR-MEM-004, FR-MEM-005, FR-MEM-008, FR-APP-008-06, FR-APP-008-07, FR-APP-008-09, FR-WEB-004, D-08]
       x-audit-event: membership.created
@@ -1559,7 +1544,7 @@ paths:
               $ref: '#/components/schemas/MemberCreateRequest'
       responses:
         '201':
-          description: 멤버 추가 완료(DB 커밋과 Valkey 반영 완료)
+          description: 멤버 추가 완료(DB 커밋과 필요한 외부 기록 확인 완료)
           headers:
             Idempotency-Replayed:
               $ref: '#/components/headers/IdempotencyReplayed'
@@ -1579,8 +1564,6 @@ paths:
           $ref: '#/components/responses/Conflict'
         '422':
           $ref: '#/components/responses/ValidationFailed'
-        '503':
-          $ref: '#/components/responses/SecurityChangeUnavailable'
 
   /api/v1/tenants/{tenant_id}/members/{membership_id}:
     get:
@@ -1615,7 +1598,7 @@ paths:
       summary: 멤버 역할·상태 변경
       description: |
         테넌트 `admin`이 역할(`admin`/`member`)과 상태(`active`/`suspended`)를 바꾼다.
-        - 역할 또는 상태 변경은 access_version을 증가시키는 접근 자격 변경이다. 8장 규약(`Idempotency-Key` 필수, `503 access_sync_pending`)을 따른다(FR-APP-008).
+        - 역할 또는 상태 변경은 접근 자격 변경이다. 8장 규약(`Idempotency-Key` 필수, `503 security_record_pending`)을 따른다(FR-APP-008).
         - **[제안]** 마지막 `active` 관리자를 강등하거나 비활성화하면 `409 last_tenant_admin`이다.
         - `removed` 멤버십은 바꿀 수 없다(`409 conflict`). 복구는 P1 재가입 신청·승인으로 한다(FR-MEM-008).
       x-requirements: [FR-MEM-003, FR-MEM-004, FR-APP-008-01, FR-APP-008-05, FR-APP-008-06, FR-APP-008-07, FR-APP-008-09, FR-WEB-004, SC-05, NFR-OPS-002-03]
@@ -1634,7 +1617,7 @@ paths:
               $ref: '#/components/schemas/MemberUpdateRequest'
       responses:
         '200':
-          description: 변경 완료(DB 커밋과 Valkey 반영 완료)
+          description: 변경 완료(DB 커밋과 필요한 외부 기록 확인 완료)
           headers:
             Idempotency-Replayed:
               $ref: '#/components/headers/IdempotencyReplayed'
@@ -1675,7 +1658,7 @@ paths:
         - $ref: '#/components/parameters/IdempotencyKeyRequired'
       responses:
         '204':
-          description: 해지 완료(DB 커밋과 Valkey 반영 완료)
+          description: 해지 완료(DB 커밋과 필요한 외부 기록 확인 완료)
           headers:
             Idempotency-Replayed:
               $ref: '#/components/headers/IdempotencyReplayed'
@@ -1737,7 +1720,7 @@ paths:
       description: |
         테넌트 `admin`이 `active` Application의 이 테넌트 이용 상태를 바꾼다. 플랫폼 관리자는 `adminPutTenantApplication`을 쓴다.
         - 테넌트 행을 잠근 뒤 현재 이용 관계를 조회하여 생성 또는 변경한다.
-        - 접근 자격 변경이므로 8장 규약(`Idempotency-Key` 필수, `503 access_sync_pending`)을 따른다.
+        - 접근 자격 변경이므로 8장 규약(`Idempotency-Key` 필수, `503 security_record_pending`)을 따른다.
         - 중단하면 성공 응답 이후 시작된 해당 테넌트·SaaS의 신규 요청이 거부된다(FR-APP-008-01).
         - 같은 테넌트·서비스의 중복 관계는 UNIQUE 제약으로 막는다(9장 보안 테스트).
       x-requirements: [FR-APP-002, FR-APP-005, FR-APP-008-01, FR-APP-008-05, FR-APP-008-06, FR-APP-008-07, FR-APP-008-09, SC-03, SC-05, NFR-OPS-002-03]
@@ -1756,7 +1739,7 @@ paths:
               $ref: '#/components/schemas/TenantApplicationWrite'
       responses:
         '200':
-          description: 변경 완료(DB 커밋과 Valkey 반영 완료)
+          description: 변경 완료(DB 커밋과 필요한 외부 기록 확인 완료)
           headers:
             Idempotency-Replayed:
               $ref: '#/components/headers/IdempotencyReplayed'
@@ -1850,7 +1833,7 @@ paths:
       summary: 테넌트 상태 변경
       description: |
         테넌트를 `active`, `suspended`, `deactivated`로 바꾼다(FR-TEN-004).
-        접근 자격 변경이므로 8장 규약을 따른다. 테넌트 상태 버전이 바뀌므로 그 테넌트의 모든 접근 자격 캐시가 무효화된다(SC-05 버전 격리 검증).
+        접근 자격 변경이므로 8장 규약을 따른다. 이후 해당 테넌트의 신규 요청은 현재 DB 상태로 검증한다(SC-05 범위 격리 검증).
       x-requirements: [FR-TEN-004, FR-APP-008-01, FR-APP-008-05, FR-APP-008-06, FR-APP-008-07, FR-APP-008-09, SC-05, NFR-OPS-002-03]
       x-audit-event: tenant.status_changed
       parameters:
@@ -1866,7 +1849,7 @@ paths:
               $ref: '#/components/schemas/TenantStatusUpdate'
       responses:
         '200':
-          description: 변경 완료(DB 커밋과 Valkey 반영 완료)
+          description: 변경 완료(DB 커밋과 필요한 외부 기록 확인 완료)
           headers:
             Idempotency-Replayed:
               $ref: '#/components/headers/IdempotencyReplayed'
@@ -2008,7 +1991,7 @@ paths:
               $ref: '#/components/schemas/TenantApplicationWrite'
       responses:
         '200':
-          description: 변경 완료(DB 커밋과 Valkey 반영 완료)
+          description: 변경 완료(DB 커밋과 필요한 외부 기록 확인 완료)
           headers:
             Idempotency-Replayed:
               $ref: '#/components/headers/IdempotencyReplayed'
@@ -2253,7 +2236,7 @@ paths:
       description: |
         이름, `sso_redirect_uris`, 상태를 바꾼다.
         - `inactive`로 바꾸면 모든 테넌트에서 그 서비스의 이용이 중단된다.
-          관련 TenantApplication 버전을 모두 올리므로 접근 자격 변경 8장 규약을 따른다.
+          현재 Application 상태를 매 요청 DB에서 확인하므로 접근 자격 변경 8장 규약을 따른다.
         - `inactive` Application의 자격 증명으로는 `/service/*`를 호출할 수 없다.
       x-requirements: [FR-APP-001, FR-APP-008-01, FR-APP-008-06, FR-APP-008-09, NFR-OPS-002-03]
       x-audit-event: application.updated
@@ -2343,15 +2326,11 @@ paths:
         - 4장 인가 검사 2~5
         - `user_activity = true`이면 로그인의 미사용 시각을 초기화한다.
 
-        **캐시 최신성**(FR-APP-008-05)
-        - SaaS는 사용자·테넌트·SaaS별 캐시에 세 버전(`tenant`, `membership`, `tenant_application`)을 기록해 두고 `cached_versions`로 보낸다.
-        - 매 요청 DB의 현재 커밋된 상태·버전을 읽어 세 단위 모두 SaaS·Valkey·DB가 같고 현재 자격이 유효할 때만 `cache_status = fresh`이며 `entitlement`를 생략한다.
-        - 하나라도 다르거나 Valkey를 신뢰할 수 없으면 DB로 검증하고 `stale`(캐시 미제공 시 `absent`)과 현재 자격 정보(`entitlement`)를 함께 반환한다.
-
-        **판정**
+        **현재 자격 검증**(FR-APP-008-05/07/08)
+        - 매 요청 DB에서 사용자·로그인·테넌트·멤버십·Application·테넌트별 서비스 이용의 현재 커밋된 상태를 읽어 판정한다.
+        - `decision = allow`이면 현재 `entitlement`를 항상 반환한다. SaaS는 이를 해당 요청에 사용한다.
         - `decision = deny`이면 SaaS는 `deny_reason`에 맞는 상태 코드(`suggested_status`)로 거부한다.
-        - Valkey 버전을 신뢰할 수 없으면 DB의 커밋된 상태·버전으로 검증한다(FR-APP-008-08).
-        - DB로도 확인할 수 없으면 `503 entitlement_unverifiable`이다. SaaS는 이전 캐시로 허용하지 않는다(FR-APP-008-03).
+        - DB로 확인할 수 없으면 `503 entitlement_unverifiable`이다. 이전 허용 캐시로 대체하지 않으며 기존 로그인은 유지한다(FR-APP-008-03).
 
         **SaaS SSO 세션 정리**(FR-AUTH-009-02-03): Passport는 SaaS SSO의 세션을 직접 지울 수 없다.
         - `deny_reason`이 `invalid_token`, `token_revoked`, `login_expired`, `account_inactive`이면 SaaS SSO는 그 세션과 서버 측 토큰을 즉시 삭제하고 세션 쿠키를 지운다.
@@ -2369,14 +2348,10 @@ paths:
             schema:
               $ref: '#/components/schemas/AccessVerifyRequest'
             examples:
-              withCache:
+              verify:
                 value:
                   access_token: eyJhbGciOiJFUzI1NiIsInR5cCI6ImF0K2p3dCIsImtpZCI6IjIwMjYtMTAifQ.eyJzdWIiOiIuLi4ifQ.sig
                   user_activity: true
-                  cached_versions:
-                    tenant: 7
-                    membership: 3
-                    tenant_application: 2
       responses:
         '200':
           description: 판정 결과
@@ -2388,10 +2363,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/AccessVerifyResponse'
               examples:
-                allowFresh:
-                  $ref: '#/components/examples/VerifyAllowFresh'
-                allowStale:
-                  $ref: '#/components/examples/VerifyAllowStale'
+                allow:
+                  $ref: '#/components/examples/VerifyAllow'
                 denyMembership:
                   $ref: '#/components/examples/VerifyDenyMembership'
         '401':
@@ -3953,7 +3926,7 @@ paths:
       - FR-AUTH-009-02-04
       responses:
         '201':
-          description: 멤버 추가 완료(DB 커밋과 Valkey 반영 완료)
+          description: 멤버 추가 완료(DB 커밋과 필요한 외부 기록 확인 완료)
           headers:
             Idempotency-Replayed:
               $ref: '#/components/headers/IdempotencyReplayed'
@@ -3973,8 +3946,6 @@ paths:
           $ref: '#/components/responses/Conflict'
         '422':
           $ref: '#/components/responses/ValidationFailed'
-        '503':
-          $ref: '#/components/responses/SecurityChangeUnavailable'
       parameters:
       - $ref: '#/components/parameters/TenantIdPath'
       - $ref: '#/components/parameters/RequestId'
@@ -4053,7 +4024,7 @@ paths:
       - NFR-OPS-002-03
       responses:
         '200':
-          description: 변경 완료(DB 커밋과 Valkey 반영 완료)
+          description: 변경 완료(DB 커밋과 필요한 외부 기록 확인 완료)
           headers:
             Idempotency-Replayed:
               $ref: '#/components/headers/IdempotencyReplayed'
@@ -4117,7 +4088,7 @@ paths:
       - NFR-OPS-002-03
       responses:
         '204':
-          description: 해지 완료(DB 커밋과 Valkey 반영 완료)
+          description: 해지 완료(DB 커밋과 필요한 외부 기록 확인 완료)
           headers:
             Idempotency-Replayed:
               $ref: '#/components/headers/IdempotencyReplayed'
@@ -4214,7 +4185,7 @@ paths:
       - NFR-OPS-002-03
       responses:
         '200':
-          description: 변경 완료(DB 커밋과 Valkey 반영 완료)
+          description: 변경 완료(DB 커밋과 필요한 외부 기록 확인 완료)
           headers:
             Idempotency-Replayed:
               $ref: '#/components/headers/IdempotencyReplayed'
@@ -4369,7 +4340,7 @@ paths:
       - NFR-OPS-002-03
       responses:
         '200':
-          description: 변경 완료(DB 커밋과 Valkey 반영 완료)
+          description: 변경 완료(DB 커밋과 필요한 외부 기록 확인 완료)
           headers:
             Idempotency-Replayed:
               $ref: '#/components/headers/IdempotencyReplayed'
@@ -4567,7 +4538,7 @@ paths:
       - NFR-OPS-002-03
       responses:
         '200':
-          description: 변경 완료(DB 커밋과 Valkey 반영 완료)
+          description: 변경 완료(DB 커밋과 필요한 외부 기록 확인 완료)
           headers:
             Idempotency-Replayed:
               $ref: '#/components/headers/IdempotencyReplayed'
@@ -5432,7 +5403,7 @@ components:
             code: too_many_requests
             request_id: req_01JBX4T9Q2
     SecurityChangeUnavailable:
-      description: access_sync_pending(Valkey 반영 미완료) 또는 security_record_pending(외부 보안 기록 미완료). db_committed로 DB 커밋 여부를 구분한다. 원 요청을 안전하게 재시도하며 탈퇴는 전용 완료 경로를 사용한다.
+      description: security_record_pending(외부 보안 기록 미완료). db_committed로 DB 커밋 여부를 구분한다. 원 요청을 안전하게 재시도하며 탈퇴는 전용 완료 경로를 사용한다.
       headers:
         Retry-After:
           $ref: '#/components/headers/RetryAfter'
@@ -5441,15 +5412,6 @@ components:
           schema:
             $ref: '#/components/schemas/Problem'
           examples:
-            cachePending:
-              value:
-                type: urn:passport:problem:access_sync_pending
-                title: Change saved; cache synchronization is pending
-                status: 503
-                code: access_sync_pending
-                db_committed: true
-                cache_synced: false
-                request_id: req_01JBX4T9Q2
             externalBeforeCommit:
               value:
                 type: urn:passport:problem:security_record_pending
@@ -5584,40 +5546,12 @@ components:
           idle_expires_at: '2026-10-31T09:41:12Z'
         refresh_token: prt_sso_server_rotated_secret
 
-    VerifyAllowFresh:
-      summary: 허용, 캐시 최신
+    VerifyAllow:
+      summary: DB의 현재 접근 자격으로 허용
       value:
         decision: allow
-        cache_status: fresh
         user_id: 0193a3b0-aaaa-7bbb-8ccc-0d0e0f101112
         tenant_id: 0193a3c1-7c2e-7d11-9a40-5b1e2f3a4b5c
-        versions:
-          tenant: 7
-          membership: 3
-          tenant_application: 2
-        auth_context:
-          sid: 0193a3d0-1111-7aaa-8bbb-0c0d0e0f1011
-          auth_method: oidc
-          config_id: 0193a3c9-5555-7aaa-8bbb-0c0d0e0f1011
-          external_issuer: https://idp.acme.example/realms/acme
-          auth_time: '2026-10-31T09:00:00Z'
-          client_id: papyrus
-        token:
-          jti: 0193a3e0-3333-7aaa-8bbb-0c0d0e0f1011
-          exp: '2026-10-31T09:30:00Z'
-        verified_at: '2026-10-31T09:12:03Z'
-
-    VerifyAllowStale:
-      summary: 허용, 캐시 갱신 필요
-      value:
-        decision: allow
-        cache_status: stale
-        user_id: 0193a3b0-aaaa-7bbb-8ccc-0d0e0f101112
-        tenant_id: 0193a3c1-7c2e-7d11-9a40-5b1e2f3a4b5c
-        versions:
-          tenant: 7
-          membership: 4
-          tenant_application: 2
         auth_context:
           sid: 0193a3d0-1111-7aaa-8bbb-0c0d0e0f1011
           auth_method: local
@@ -5775,7 +5709,6 @@ components:
       - validation_failed
       - idempotency_key_reused
       - too_many_requests
-      - access_sync_pending
       - security_record_pending
       - entitlement_unverifiable
       - idp_status_unavailable
@@ -5830,10 +5763,7 @@ components:
             - oidc
         db_committed:
           type: boolean
-          description: 보안 변경 오류의 DB 커밋 여부. access_sync_pending에서는 항상 true
-        cache_synced:
-          type: boolean
-          description: access_sync_pending에서는 false. 외부 기록 오류에는 Valkey 반영을 시도한 경우만 포함
+          description: 외부 보안 기록 오류의 DB 커밋 여부
         security_recorded:
           type: boolean
           description: security_record_pending에서는 false. 외부 변경 의도 또는 커밋 확인의 영속화 미완료
@@ -6849,21 +6779,6 @@ components:
           default: false
 
     # ---------- 서비스(SaaS) ----------
-    AccessVersions:
-      type: object
-      additionalProperties: false
-      required: [tenant, membership, tenant_application]
-      description: FR-APP-008-05의 세 단위 버전
-      properties:
-        tenant:
-          type: integer
-          minimum: 0
-        membership:
-          type: integer
-          minimum: 0
-        tenant_application:
-          type: integer
-          minimum: 0
     AccessVerifyRequest:
       type: object
       additionalProperties: false
@@ -6877,8 +6792,6 @@ components:
         user_activity:
           type: boolean
           description: 사용자 명시적 동작으로 발생한 요청이면 `true`(FR-AUTH-009-03-03/06)
-        cached_versions:
-          $ref: '#/components/schemas/AccessVersions'
     AuthContext:
       type: object
       required:
@@ -6991,23 +6904,15 @@ components:
           - 401
           - 403
           description: '`deny`일 때 SaaS가 반환할 상태 코드. 토큰·로그인 사유는 401, 그 외 403'
-        cache_status:
-          type: string
-          enum:
-          - fresh
-          - stale
-          - absent
-          description: '`allow`일 때만'
         user_id:
           $ref: '#/components/schemas/Uuid'
         tenant_id:
           $ref: '#/components/schemas/Uuid'
-        versions:
-          $ref: '#/components/schemas/AccessVersions'
         auth_context:
           $ref: '#/components/schemas/AuthContext'
         entitlement:
           $ref: '#/components/schemas/Entitlement'
+          description: '`allow`이면 항상 반환하는 DB의 현재 접근 자격. 해당 요청에 적용한다.'
         token:
           type: object
           required:

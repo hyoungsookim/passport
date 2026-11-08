@@ -7,7 +7,7 @@ Phase 2의 ORM(`passport/db/models/`)과 초기 Alembic 마이그레이션은 �
 
 **2026-11-02 확정 반영:** Python IntEnum·smallint 저장, 외부 로그아웃·철회의 정확한 대상 매핑, 외부 보안 변경 기록의 저장 성공 후 완료 응답, 탈퇴 완료 확인 키 24시간을 적용한다.
 
-**2026-11-05 탈퇴 정책 변경:** 탈퇴 시 `users` 행과 직접·간접 FK 자손을 같은 트랜잭션에서 물리 삭제한다. 개인정보 추가 보관과 탈퇴자 개인정보 조회는 제공하지 않으며 `audit_logs`는 보존한다. 사용자 FK가 없는 완료 확인·동기화·복원용 운영 기록은 개인정보 값 없이 각 보존 정책을 따른다.
+**2026-11-05 탈퇴 정책 변경:** 탈퇴 시 `users` 행과 직접·간접 FK 자손을 같은 트랜잭션에서 물리 삭제한다. 개인정보 추가 보관과 탈퇴자 개인정보 조회는 제공하지 않으며 `audit_logs`는 보존한다. 사용자 FK가 없는 완료 확인·복원용 운영 기록은 개인정보 값 없이 각 보존 정책을 따른다.
 
 **인증 정책 책임:** OTP 등록·검증·복구와 MFA 정책은 OIDC Provider에서 관리한다. Passport는 별도 MFA 판정·저장·재전달을 하지 않으며 ID Token의 `acr`·`amr`과 인정 규칙을 저장하지 않는다. OIDC 토큰의 기본 검증과 민감 작업 재인증은 유지한다.
 
@@ -17,10 +17,9 @@ Phase 2의 ORM(`passport/db/models/`)과 초기 Alembic 마이그레이션은 �
 | --- | --- |
 | DBMS | PostgreSQL 18, 스키마 `public` |
 | 테이블 이름 | 복수형 snake_case(`users`, `tenant_memberships`). PostgreSQL 예약어 `user`를 피한다 |
-| 기본 키 | `users`·`identities`·`tenants`·`tenant_oidc_configurations`·`tenant_memberships`는 `<엔터티>_id uuid`(`user_id`, `identity_id`, `tenant_id`, `config_id`, `membership_id`), 나머지 테이블은 `id uuid`. 값은 애플리케이션에서 `uuid.uuid7()`로 만든다. 시간순이라 인덱스 지역성이 좋고 계약의 ID 예시 형식과 같다. 1:1 확장 테이블은 부모 키를 PK로 쓴다 |
+| 기본 키 | `users`·`identities`·`tenants`·`tenant_oidc_configurations`·`tenant_memberships`는 `<엔터티>_id uuid`(`user_id`, `identity_id`, `tenant_id`, `config_id`, `membership_id`), `bff_sessions`는 `sesstion_id uuid`, 나머지 테이블은 `id uuid`. 값은 애플리케이션에서 `uuid.uuid7()`로 만든다. 시간순이라 인덱스 지역성이 좋고 계약의 ID 예시 형식과 같다. 1:1 확장 테이블은 부모 키를 PK로 쓴다 |
 | 시각 | `timestamptz`, UTC. `created_at`·`updated_at`의 기본값은 `now()` |
 | 열거 값 | Python `enum.IntEnum`의 명시적 정수 키(`.value`)를 PostgreSQL `smallint`에 저장한다. CHECK 적용 범위는 1.1절을 따른다 |
-| 접근 자격 버전 | `access_version bigint NOT NULL DEFAULT 1`. `tenant_applications`에만 둔다. 테넌트·멤버십 단위 버전은 두지 않는다(13장 11번) |
 | 이메일 | 소문자 정규화 값만 저장한다(계약 `Email`). `users.user_email`은 애플리케이션에서 정규화·검증한다 |
 | FK 삭제 동작 | 기본 `RESTRICT`. `users`를 참조하는 모든 FK와 그 자손으로 내려가는 FK는 `ON DELETE CASCADE`이며 표에 적는다. 공유 부모인 테넌트·서비스·OIDC 설정은 삭제하지 않는다. `audit_logs`에는 FK를 두지 않는다 |
 | CHECK 제외 테이블 | `users`, `user_securities`, `tenants`, `tenant_oidc_configurations`, `tenant_memberships`에는 열거값·형식·상태 조합을 포함한 모든 DB CHECK를 두지 않는다. 해당 값의 검증은 애플리케이션에서 수행한다 |
@@ -41,7 +40,7 @@ Phase 2의 ORM(`passport/db/models/`)과 초기 Alembic 마이그레이션은 �
 | `UserStatus` | `users.user_status` | `1=PENDING_VERIFICATION`, `2=ACTIVE`, `3=SUSPENDED`, `4=DEACTIVATED` |
 | `PasswordAlgorithm` | `user_securities.password_algorithm` | `1=ARGON2ID` |
 | `TenantStatus` | `tenants.tenant_status` | `1=ACTIVE`, `2=SUSPENDED`, `3=DEACTIVATED` |
-| `ApplicationStatus` | `applications.status`, `tenant_applications.status` | `1=ACTIVE`, `2=INACTIVE` |
+| `ApplicationStatus` | `applications.status`, `tenant_applications.application_status` | `1=ACTIVE`, `2=INACTIVE` |
 | `OidcProviderType` | `tenant_oidc_configurations.provider_type` | `1=KEYCLOAK`, `2=AUTH0` |
 | `OidcConfigurationStatus` | `tenant_oidc_configurations.config_status` | `1=ENABLED`, `2=DISABLED` |
 | `OidcValidationStatus` | `tenant_oidc_configurations.last_validation_status` | `1=OK`, `2=FAILED` |
@@ -53,17 +52,16 @@ Phase 2의 ORM(`passport/db/models/`)과 초기 Alembic 마이그레이션은 �
 | `ClientType` | `logins.client_type` | `1=WEB`, `2=NATIVE` |
 | `ReauthenticationMethod` | `logins.reauth_method` | `1=PASSWORD`, `2=OIDC` |
 | `LoginEndReason` | `logins.end_reason` | `1=LOGOUT`, `2=LOGOUT_ALL`, `3=PASSWORD_CHANGED`, `4=ACCOUNT_INACTIVE`, `5=REFRESH_REUSE`, `6=OIDC_TRUST_CHANGED`, `7=EXTERNAL_ACCOUNT_BLOCKED`, `8=PROVIDER_LOGOUT`, `9=EXTERNAL_TOKEN_REVOKED`, `11=RESTORE` |
-| `OidcBindingKind` | `oidc_login_bindings.kind` | `1=SESSION`, `2=TOKEN` |
+| `OidcBindingKind` | `oidc_login_bindings.binding_kind` | `1=SESSION`, `2=TOKEN` |
 | `SigningAlgorithm` | `signing_keys.alg` | `1=ES256` |
 | `OidcIntent` | `oidc_login_transactions.intent` | `1=LOGIN`, `2=LINK`, `3=REAUTH` |
 | `RequestMethod` | `idempotency_keys.request_method` | `1=GET`, `2=POST`, `3=PUT`, `4=PATCH`, `5=DELETE`, `6=HEAD`, `7=OPTIONS`, `8=TRACE`, `9=CONNECT` |
-| `AccessScope` | `access_version_syncs.scope` | `3=TENANT_APPLICATION` |
 | `AuditResult` | `audit_logs.result` | `1=SUCCESS`, `2=FAILURE` |
 | `AuditActorType` | `audit_logs.actor_type` | `1=USER`, `2=PLATFORM_ADMIN`, `3=APPLICATION`, `4=SYSTEM` |
 | `AuditTargetType` | `audit_logs.target_type` | `1=USER`, `2=TENANT`, `3=TENANT_MEMBERSHIP`, `4=APPLICATION`, `5=TENANT_APPLICATION`, `6=TENANT_OIDC_CONFIGURATION`, `7=LOGIN`, `8=IDENTITY`, `12=USER_PROFILE` |
 | `AuditAction` | `audit_logs.action` | 아래 `AuditAction` 키 표 |
 
-`AuditAction`의 키는 현재 API 계약에 있는 이벤트를 아래처럼 고정한다. 폐기한 `UserStatus` 키 `5`, `MembershipStatus` 키 `1`, `MembershipRemovalReason` 키 `2`·`3`, `LoginEndReason` 키 `10`, `AuditAction` 키 `9`·`10`·`15`~`21`·`24`·`26`·`29`~`31`·`44`, `AuditTargetType` 키 `9`~`11`·`13`, `AccessScope` 키 `1`·`2`는 재사용하지 않는다. 계약에 새 이벤트나 서버 내부 이벤트를 추가할 때 기존 키를 유지하고 새 키를 명시 배정한다.
+`AuditAction`의 키는 현재 API 계약에 있는 이벤트를 아래처럼 고정한다. 폐기한 `UserStatus` 키 `5`, `MembershipStatus` 키 `1`, `MembershipRemovalReason` 키 `2`·`3`, `LoginEndReason` 키 `10`, `AuditAction` 키 `9`·`10`·`15`~`21`·`24`·`26`·`29`~`31`·`44`, `AuditTargetType` 키 `9`~`11`·`13`은 재사용하지 않는다. 계약에 새 이벤트나 서버 내부 이벤트를 추가할 때 기존 키를 유지하고 새 키를 명시 배정한다.
 
 | 키 | 이벤트 명칭 |
 | --- | --- |
@@ -115,7 +113,6 @@ Phase 2의 ORM(`passport/db/models/`)과 초기 Alembic 마이그레이션은 �
 | 계정·테넌트·멤버십·서비스·감사 | PostgreSQL | 원본 |
 | 로그인, Refresh Token 계열, BFF 세션, 서명 키 | PostgreSQL **[제안]** | 철회·재사용 탐지·복원 시 일괄 무효화를 같은 트랜잭션과 같은 백업 기준으로 처리한다 |
 | OIDC 트랜잭션, 링크 티켓, SSO 코드, 이메일 확인 토큰 | PostgreSQL + 만료 정리 작업 **[제안]** | 소비와 로그인·계정 생성을 한 트랜잭션으로 묶는다. 목표 부하(100 RPS)에서 충분하다 |
-| 접근 자격 버전 캐시 | Valkey | FR-APP-008-07. 원본은 DB의 `access_version`이다(8장) |
 | 복원용 보안 변경 기록 | DB 백업과 독립적인 외부 영속 저장소 | 성공 응답 전 영속화를 확인한다. DB에는 연결·재시도용 기록만 둔다(9.4절) |
 | 사용자 보안 상태·로그인 통계 | PostgreSQL `user_securities` | 비밀번호·연속 실패 횟수·계정 잠금 시각·마지막 로그인 시각의 원본 |
 | 시간창별·IP별 속도·실패 제한 카운터, OIDC Discovery·JWKS 캐시 | Valkey 또는 프로세스 메모리 | 일시적인 집계·캐시. 저장된 `locked_until`은 캐시 손실과 무관하게 적용한다 |
@@ -160,7 +157,7 @@ erDiagram
     IDEMPOTENCY_KEYS ||--o| WITHDRAWAL_RECEIPTS : completion_only
 ```
 
-`signing_keys`, `idempotency_keys`, `access_version_syncs`, `security_change_events`, `audit_logs`에는 FK가 없다. `withdrawal_receipts`는 `idempotency_keys`를 참조한다.
+`signing_keys`, `idempotency_keys`, `security_change_events`, `audit_logs`에는 FK가 없다. `withdrawal_receipts`는 `idempotency_keys`를 참조한다.
 
 ## 4. 데이터 사전
 
@@ -339,16 +336,21 @@ erDiagram
 
 | 컬럼 | 형식 | NULL | 기본값 | 설명 |
 | --- | --- | --- | --- | --- |
-| `id` | uuid | | UUIDv7 | `application_id` |
-| `code` | varchar(32) | | | UNIQUE. `client_id`이자 Access Token `aud` |
-| `name` | varchar(100) | | | |
-| `status` | smallint | | `1` | `ApplicationStatus`. `active`, `inactive` |
+| `application_id` | uuid | | UUIDv7 | `application_id` |
+| `application_code` | varchar(32) | | | UNIQUE. `client_id`이자 Access Token `aud` |
+| `application_name` | varchar(100) | | | |
+| `application_status` | smallint | | `1` | `ApplicationStatus`. `active`, `inactive` |
 | `client_secret_hash` | bytea | | | SHA-256. 서비스 인증과 BFF client 인증에 함께 쓴다(13장 2번) |
 | `previous_client_secret_hash` | bytea | 예 | | 교체 직전 secret |
 | `previous_secret_valid_until` | timestamptz | 예 | | **[제안]** 교체 후 24시간 |
 | `secret_rotated_at` | timestamptz | | `now()` | |
 | `bff_redirect_uris` | text[] | | `{}` | API의 `sso_redirect_uris`에 매핑하는 SSO callback URI. 정확히 일치해야 한다 |
-| 공통 열 | | | | |
+| `created_at` | timestamptz | | | 생성 시각 |
+| `updated_at` | timestamptz | | | 수정 시각 |
+| `created_by` | uuid | | | 생성한 user_id |
+| `updated_by` | uuid | | | 수정한 user_id |
+| `external_id` | varchar(50) | 예 | | 외부 서비스 연결용 식별값 |
+| `external_source` | varchar(50) | 예 | | 외부 서비스 연결용 식별값이 보관된 곳 |
 
 - CHECK: `status`, 계약 `ApplicationCode` 정규식, `code <> 'passport'`
 - CHECK `ck_applications_previous_secret`: `(previous_client_secret_hash IS NULL) = (previous_secret_valid_until IS NULL)`
@@ -358,15 +360,15 @@ erDiagram
 
 **목적:** 전역 테넌트와 등록 SaaS 사이의 서비스 이용 관계를 관리한다.
 
-**역할:** 테넌트별 서비스 활성 상태와 접근 자격 버전을 통해 해당 테넌트 구성원들의 서비스 이용 자격을 판단하는 기준을 제공한다. 행이 없으면 계약의 `not_enabled`이며 처음 활성화할 때 생성한다.
+**역할:** 테넌트별 서비스 활성 상태를 통해 해당 테넌트 구성원들의 서비스 이용 자격을 판단하는 기준을 제공한다. 매 요청 DB의 현재 상태를 직접 확인한다. 행이 없으면 계약의 `not_enabled`이며 처음 활성화할 때 생성한다.
 
 | 컬럼 | 형식 | NULL | 기본값 | 설명 |
 | --- | --- | --- | --- | --- |
 | `tenant_id` | uuid | | | PK, FK `tenants` |
 | `application_id` | uuid | | | PK, FK `applications` |
-| `status` | smallint | | | `ApplicationStatus`. `active`, `inactive` |
-| `access_version` | bigint | | `1` | 상태 변경마다 1 증가 |
-| 공통 열 | | | | |
+| `application_status` | smallint | | | `ApplicationStatus`. `active`, `inactive`. API의 `status`로 매핑 |
+| `created_at` | timestamptz | | | 생성 시각 |
+| `created_by` | uuid | | | 생성한 user_id |
 
 - 인덱스 `application_id`
 
@@ -412,12 +414,12 @@ erDiagram
 | 컬럼 | 형식 | NULL | 기본값 | 설명 |
 | --- | --- | --- | --- | --- |
 | `login_id` | uuid | | | PK, FK `logins` `CASCADE` |
-| `kind` | smallint | | | `OidcBindingKind`. PK. `session`, `token` |
+| `binding_kind` | smallint | | | `OidcBindingKind`. PK. `session`, `token` |
 | `binding_hash` | bytea | | | PK. 검증한 외부 `sid` 또는 철회 대상 토큰 식별자의 SHA-256 |
 | `created_at` | timestamptz | | `now()` | |
 
-- CHECK `ck_oidc_login_bindings_kind_enum`, CHECK `ck_oidc_login_bindings_hash`: `octet_length(binding_hash) = 32`
-- 인덱스 (`kind`, `binding_hash`). 조회 시 `logins`와 조인해 `tenant_id`, `config_id`와 로그인 종료 상태를 확인한다. 외부 토큰 원문은 보관하지 않는다.
+- CHECK `ck_oidc_login_bindings_binding_kind_enum`, CHECK `ck_oidc_login_bindings_hash`: `octet_length(binding_hash) = 32`
+- 인덱스 (`binding_kind`, `binding_hash`). 조회 시 `logins`와 조인해 `tenant_id`, `config_id`와 로그인 종료 상태를 확인한다. 외부 토큰 원문은 보관하지 않는다.
 - 신뢰할 수 있는 통지의 대상 식별자와 일치하는 로그인만 종료한다. 식별자가 없거나 매핑되지 않는 통지는 거부·감사하며, `(issuer, subject)`만으로 종료 범위를 넓히지 않는다. 외부 계정 차단은 별도로 해당 신원·테넌트의 로그인 전체를 종료한다.
 
 #### `refresh_token_families`
@@ -461,7 +463,7 @@ erDiagram
 
 | 컬럼 | 형식 | NULL | 기본값 | 설명 |
 | --- | --- | --- | --- | --- |
-| `id` | uuid | | UUIDv7 | |
+| `sesstion_id` | uuid | | UUIDv7 | PK. 요청한 컬럼명을 그대로 사용한다 |
 | `session_hash` | bytea | | | UNIQUE. 쿠키 값의 SHA-256 |
 | `login_id` | uuid | | | FK `logins` `CASCADE` |
 | `refresh_family_id` | uuid | | | FK `refresh_token_families` `CASCADE`, UNIQUE |
@@ -571,7 +573,7 @@ erDiagram
 
 **목적:** 동일한 클라이언트 요청의 재시도를 식별하고 중복 변경을 방지하기 위한 처리 결과를 보관한다.
 
-**역할:** 요청자·멱등 키별로 요청 해시와 응답을 기록하여 요청의 동일성을 검증하고 처음 처리 결과를 재생한다. 외부 기록·Valkey 반영의 부분 실패 후에도 DB 상태와 접근 자격 버전을 중복 변경하지 않는 재시도의 기준이 된다.
+**역할:** 요청자·멱등 키별로 요청 해시와 응답을 기록하여 요청의 동일성을 검증하고 처음 처리 결과를 재생한다. 외부 기록 확인의 부분 실패 후에도 DB 상태를 중복 변경하지 않는 재시도의 기준이 된다.
 
 | 컬럼 | 형식 | NULL | 기본값 | 설명 |
 | --- | --- | --- | --- | --- |
@@ -593,7 +595,7 @@ erDiagram
 
 **목적:** 탈퇴로 로그인·토큰이 종료된 후에도 원 탈퇴 요청의 완료 처리만 재개·확인할 수 있는 전용 키를 관리한다(FR-USER-005-02).
 
-**역할:** 키 해시·원 멱등 요청과의 연결·24시간 만료를 보관하여 외부 커밋 확인과 Valkey 동기화의 제한된 재시도를 지원한다. 일반 API 인증이나 계정 복구에는 사용하지 않는다.
+**역할:** 키 해시·원 멱등 요청과의 연결·24시간 만료를 보관하여 외부 커밋 확인의 제한된 재시도를 지원한다. 일반 API 인증이나 계정 복구에는 사용하지 않는다.
 
 | 컬럼 | 형식 | NULL | 기본값 | 설명 |
 | --- | --- | --- | --- | --- |
@@ -605,7 +607,7 @@ erDiagram
 
 - CHECK `ck_withdrawal_receipts_hash`: `octet_length(receipt_hash) = 32`
 - 인덱스 `expires_at`. 연결된 멱등 행은 확인 키의 만료 전에 삭제하지 않는다. 클라이언트가 첫 탈퇴 요청 **전에** CSPRNG로 256비트 값을 만들고 보관한다. 서버 응답이 유실되어도 키는 클라이언트에 남는다. 원문은 서버에 저장·로그·응답하지 않는다.
-- 인증된 최초 탈퇴 트랜잭션에서만 생성한다. 같은 멱등 키에 다른 확인 키를 제출하면 거부한다. 완료 경로는 키로 연결된 **이미 커밋된** 요청의 외부 기록 확인·Valkey 동기화·완료 응답만 수행한다.
+- 인증된 최초 탈퇴 트랜잭션에서만 생성한다. 같은 멱등 키에 다른 확인 키를 제출하면 거부한다. 완료 경로는 키로 연결된 **이미 커밋된** 요청의 외부 기록 확인·완료 응답만 수행한다.
 - 쿠키·Bearer 인증 없이 완료 경로에서만 수용한다. 탈퇴 시작·취소·계정 복구·로그인·개인정보 조회·다른 API 호출에는 사용할 수 없다. 만료되어도 서버의 미완료 처리 재시도는 계속한다.
 
 #### `security_change_events`
@@ -619,26 +621,12 @@ erDiagram
 | `id` | uuid | | UUIDv7 | 외부 기록의 멱등 `event_id`와 동일 |
 | `journal_sequence` | bigint | | | 외부 저장소가 부여한 설치 내 단조 증가 순번, UNIQUE |
 | `operation_id` | uuid | | | 원 `idempotency_keys.id` 또는 서버 작업 ID. 인덱스 |
-| `changes` | jsonb | | | 대상 유형·ID·버전과 재적용할 상태·삭제 명령 |
+| `changes` | jsonb | | | 대상 유형·ID와 재적용할 상태·삭제 명령 |
 | `external_ref` | varchar(2048) | | | 외부 변경 의도 기록의 참조 |
 | `confirmed_at` | timestamptz | 예 | | DB 커밋 사실의 외부 기록까지 확인한 시각 |
 | `created_at` | timestamptz | | `now()` | |
 
 - 상태 변경과 함께 커밋한다. 외부 기록과 동일하게 개인정보 값·자격 증명·토큰은 넣지 않는다. 재처리는 `event_id` 기준 멱등이다. 보관은 9.4절을 따른다.
-
-#### `access_version_syncs`
-
-**목적:** DB에 커밋한 접근 자격 버전 중 Valkey 반영이 완료되지 않은 동기화 대기 항목을 관리한다.
-
-**역할:** 테넌트별 서비스 이용 관계마다 미반영 최신 버전을 유지한다. 커밋 후 캐시 반영, 실패 후 재시도, 변경 완료 응답 전 동기화 확인에 사용한다(8장).
-
-| 컬럼 | 형식 | NULL | 기본값 | 설명 |
-| --- | --- | --- | --- | --- |
-| `scope` | smallint | | | `AccessScope`. PK. `tenant_application` |
-| `tenant_id` | uuid | | | PK |
-| `entity_id` | uuid | | | PK. `application_id` |
-| `version` | bigint | | | 반영할 버전 |
-| `enqueued_at` | timestamptz | | `now()` | |
 
 #### `audit_logs`
 
@@ -689,8 +677,8 @@ erDiagram
 ### 5.3 테넌트, 서비스
 
 - `tenants.tenant_status`: `active`, `suspended`, `deactivated` 사이를 플랫폼 관리자가 바꾼다.
-- `tenant_applications.status`: 없음 → `active` → `inactive` ↔ `active`. 바뀔 때마다 `access_version` + 1
-- `applications.status`: `active` ↔ `inactive`. 접근 자격 버전 대상이 아니며 요청마다 직접 확인한다.
+- `tenant_applications.application_status`: 없음 → `active` → `inactive` ↔ `active`. 매 요청 DB의 현재 이용 상태를 직접 확인한다.
+- `applications.status`: `active` ↔ `inactive`. 요청마다 현재 DB 상태를 직접 확인한다.
 
 ### 5.4 OIDC 설정
 
@@ -758,21 +746,16 @@ erDiagram
 | OIDC 설정 변경 | 설정 갱신, 신뢰 변경이면 관련 로그인 종료·미완료 인증 흐름 취소 | 테넌트·설정 행을 순서대로 잠가 최초 생성·후속 변경과 인증 결과 반영을 직렬화한다(5.4절) |
 | 탈퇴 | 9.2절. `withdrawal_receipts`도 원 멱등 키와 함께 삽입 | 접근 자격 변경 규약. 완료 재시도는 전용 확인 키로만 원 요청에 연결 |
 
-## 8. 접근 자격 버전과 Valkey
+## 8. 접근 자격 변경과 요청별 DB 검증
 
-원본은 DB의 `access_version`이고, Valkey는 Passport 검증 경로의 버전 캐시다(FR-APP-008-07). 9.4절 대상 작업은 아래 처리와 함께 외부 보안 기록의 영속화·완료 확인도 적용한다.
+접근 자격의 원본은 DB의 현재 커밋된 상태다. Passport와 연동 SaaS는 테넌트 범위 요청마다 이 상태를 검증하며, 이전 토큰 클레임이나 허용 캐시로 검증을 대체하지 않는다(FR-APP-008-01~09).
 
-1. 변경 API는 한 트랜잭션에서 다음을 한다. 9.4절 대상이면 상태 변경 전에 외부 변경 의도의 영속화를 확인한다.
-   - `idempotency_keys`에 먼저 삽입한다. 같은 키의 동시 요청은 UNIQUE 인덱스에서 기다렸다가 처음 결과를 재생한다(계약 8장).
-   - 상태를 바꾼다. 테넌트별 서비스 이용 변경이면 `tenant_applications.access_version`을 1 올린다(FR-APP-008-06). 테넌트·멤버십 변경은 버전 없이 6의 요청별 DB 상태 검사로 차단한다(13장 11번).
-   - 버전을 올렸으면 `access_version_syncs`에 `version = GREATEST(기존, 새 값)`로 upsert한다.
-   - 돌려줄 응답을 `idempotency_keys`에 기록한다.
-2. 커밋 후 `access_version_syncs`에 남은 행을 Valkey에 "더 클 때만 쓰기"로 반영하고(이전 버전으로 덮어쓰지 않음), 반영한 버전 이하인 행을 지운다. 이 버전만으로 접근을 허용하지 않고 6의 DB 존재·상태 검사를 적용한다. 평소 이 테이블은 비어 있으므로 남은 행 전체를 반영해도 비용이 작다.
-3. 2와 대상 작업의 9.4절 외부 기록 확인이 끝나야 성공을 응답한다. Valkey 반영 실패는 `503 access_sync_pending`, 외부 기록 확인 실패는 `503 security_record_pending`이다. 재시도할 행은 남는다.
-4. 같은 `Idempotency-Key`로 재시도하면 상태를 다시 바꾸지 않는다. 원 작업의 외부 커밋 확인과 2를 다시 수행하고 저장된 응답을 돌려준다(FR-APP-008-09). 행의 `version`은 upsert로 항상 최신 커밋 값이다. 탈퇴의 로그인 종료 후 재시도는 9.2절의 전용 완료 경로를 사용한다.
-5. **[제안]** 정리 작업이 10초마다 2를 실행한다. 클라이언트가 재시도하지 않아도 Valkey가 뒤처진 채로 남지 않게 하기 위해서다.
-6. `verifyAccess`는 매 요청 DB에서 사용자·로그인 존재 여부, 테넌트·멤버십의 현재 커밋된 상태, 테넌트별 서비스 이용의 상태·버전을 함께 읽는다. 삭제된 사용자·로그인·멤버십은 접근 거부이며 DB 연결 장애로 검증할 수 없는 경우와 구분한다. **SaaS 버전 = Valkey 버전 = DB 버전**이고 현재 자격도 유효할 때만 `fresh`다. Valkey 값 누락·불일치·장애이면 DB 결과로 검증하고 현재 자격을 함께 반환한다(캐시를 보냈으면 `stale`, 없으면 `absent`). DB 검증 실패 시 `503 entitlement_unverifiable`이며 기존 로그인은 유지한다(FR-APP-008-08).
-7. Valkey 재시작·이전 스냅샷 복구·키 재생성·지연된 쓰기로 값이 되돌아가도 6의 대조로 이전 허용 캐시를 신뢰하지 않는다. DB와 다른 값은 폐기 후 DB 기준으로 재구축한다. 이 방식은 요청별 DB 버전 조회 비용을 들여 캐시 복구 시 최신성 증명 문제를 단순화한다. 변경 API의 성공 조건인 Valkey 반영은 그대로 유지한다.
+1. 변경 API는 원 멱등 행을 확보하고 관련 행을 잠근 뒤 현재 상태를 검증한다. 같은 키의 동시 요청은 UNIQUE 인덱스에서 기다렸다가 처음 결과를 재생한다.
+2. 9.4절 대상이면 변경 의도를 외부에 영속 기록한 뒤, 상태 변경·멱등 응답·보안 변경 연결 원장을 같은 DB 트랜잭션에서 커밋한다. 탈퇴는 사용자와 모든 FK 자손을 삭제한다.
+3. DB 커밋과 대상 작업의 외부 커밋 확인이 끝나야 성공을 응답한다. 외부 확인 실패는 `503 security_record_pending`이며 DB 커밋 여부를 함께 반환한다. 같은 키로 재시도하면 원 작업의 외부 확인만 재개하고 저장된 결과를 반환한다. 탈퇴 후에는 9.2절의 전용 완료 경로를 사용한다.
+4. `verifyAccess`는 매 요청 사용자·로그인 존재와 유효성, 테넌트·멤버십·Application·테넌트별 서비스 이용의 현재 상태를 DB에서 읽는다. 유효하면 현재 `entitlement`를 반환하고, 삭제·해지·중지이면 거부한다. 검증된 결과는 해당 요청에만 적용한다.
+5. DB에서 현재 상태를 확인할 수 없으면 `503 entitlement_unverifiable`이며 이전 캐시로 허용하지 않는다. 이 검증 실패만으로 기존 로그인·Refresh Token을 폐기하지 않는다. Valkey는 접근 자격의 승인·거부 판단에 사용하지 않는다.
+6. 변경 완료 응답 이후 시작된 신규 요청은 변경 후 DB 상태로 판단한다. 이미 인가 검사를 통과한 요청은 기존 요구사항대로 완료를 허용한다(FR-APP-008-02).
 
 ## 9. 데이터 생명주기
 
@@ -787,7 +770,6 @@ erDiagram
 | `security_change_events` | 미확인 행 재처리. 확인된 행 삭제는 9.4절 보존 조건 충족 후 | 10초 / 1일 |
 | `audit_logs` | `occurred_at`에서 365일 경과(NFR-SEC-007-01) | 1일 |
 | `signing_keys` | `expires_at`에서 7일 경과 | 1일 |
-| `access_version_syncs` | 남은 행 재반영(8장 5) | 10초 |
 
 ### 9.2 탈퇴 (FR-USER-005)
 
@@ -810,26 +792,25 @@ erDiagram
 1. 서비스 유입·변경 작업을 중지하고 복원 백업의 외부 저널 기준점과 보존 기록의 연속성을 검증한다. 9.4절에 따라 탈퇴·차단·해지·삭제를 먼저 재적용한다. 누락·검증 실패가 있으면 서비스를 재개하지 않는다.
 2. 모든 진행 중 로그인을 `restore`로 끝내고 `bff_sessions`와 `withdrawal_receipts`를 지운다. 복원 전 탈퇴 확인 키도 재사용하지 않는다.
 3. 모든 `signing_keys`를 폐기하고 새 키를 만든다. 복원 전 Access Token은 서명 검증에서 거부된다.
-4. 외부 저널의 기존 버전 상한보다 큰 새 접근 자격 버전 구간을 외부 저장소에 영속 예약한 뒤 모든 `access_version`을 그 구간으로 올린다. 반복 복원에도 이전에 노출한 버전을 재사용하지 않는다.
-5. Valkey의 접근 자격 버전 키를 모두 지우고 DB에서 재구축한다. 복원 전 토큰 거부·삭제 정보 비노출·접근 차단을 확인한 후에만 서비스를 재개한다(NFR-OPS-002-02).
+4. 복원 전 토큰 거부·삭제 정보 비노출·접근 차단을 DB 현재 상태로 검증한 뒤에만 서비스를 재개한다(NFR-OPS-002-02).
 
 ### 9.4 외부 보안 변경 기록 (NFR-OPS-002-03)
 
 외부 저장소는 Passport DB·그 백업과 장애 영역 및 복원 절차가 독립적이어야 한다. 설치별 단조 증가 순번, `event_id` 멱등 기록, 영속 저장 확인, 무결성 검증과 보존 중 삭제 방지를 제공한다. 제품 선택은 구현 사항이며 로컬 파일이나 DB 내 원장만으로 대체하지 않는다.
 
 - **기록 대상:** 탈퇴, 계정 차단·비활성화, 멤버십 해지·비활성화, 테넌트·서비스 이용 중지, 개인정보·인증 수단의 삭제. 대응하는 재활성화·재부여도 순서대로 기록하여 과거 차단을 무조건 재적용하지 않는다. 삭제한 비밀값의 복원 대신 해당 인증 수단을 무효화한다.
-- **내용:** 기록 형식 버전(`schema_version`), 설치 ID, `event_id`, 외부 순번, 원 작업 ID, 대상 ID·상태 버전·변경/삭제 명령·시각·무결성 정보만 보관한다. 탈퇴 시 원래 탈퇴 시각·삭제한 사용자 ID·FK 자손 ID를 포함한다. 프로필 값, 삭제된 개인정보·비밀값·토큰 원문은 복사하지 않는다.
-- **쓰기 순서:** HTTP 변경 요청은 `Idempotency-Key`가 필수다. 먼저 원 멱등 행을 확보하고 대상 행을 잠그고 검증한 뒤 변경 의도를 외부에 영속 기록한다. 실패하면 DB 변경을 롤백하고 `503 security_record_pending`(`db_committed: false`, `security_recorded: false`)이다. 성공하면 상태·버전·`security_change_events`·필요한 멱등/확인 키를 같은 DB 트랜잭션에서 커밋한다. 이후 외부에 DB 커밋 확인을 멱등 기록하고 `confirmed_at`을 채운다. 이 확인과 필요한 Valkey 반영을 마쳐야 성공을 응답한다.
-- **부분 실패:** DB 커밋 후 외부 확인 실패는 `503 security_record_pending`(`db_committed: true`, `security_recorded: false`)이며 DB 변경을 유지한다. 작업 ID로 원 이벤트를 찾아 외부 확인·캐시 반영만 재시도한다. 탈퇴는 9.2절 완료 경로를 사용한다. 서버 작업도 미확인 이벤트를 재처리한다.
+- **내용:** 기록 형식 버전(`schema_version`), 설치 ID, `event_id`, 외부 순번, 원 작업 ID, 대상 ID·상태·변경/삭제 명령·시각·무결성 정보만 보관한다. 탈퇴 시 원래 탈퇴 시각·삭제한 사용자 ID·FK 자손 ID를 포함한다. 프로필 값, 삭제된 개인정보·비밀값·토큰 원문은 복사하지 않는다.
+- **쓰기 순서:** HTTP 변경 요청은 `Idempotency-Key`가 필수다. 먼저 원 멱등 행을 확보하고 대상 행을 잠그고 검증한 뒤 변경 의도를 외부에 영속 기록한다. 실패하면 DB 변경을 롤백하고 `503 security_record_pending`(`db_committed: false`, `security_recorded: false`)이다. 성공하면 상태·`security_change_events`·필요한 멱등/확인 키를 같은 DB 트랜잭션에서 커밋한다. 이후 외부에 DB 커밋 확인을 멱등 기록하고 `confirmed_at`을 채운다. 외부 커밋 확인을 마쳐야 성공을 응답한다.
+- **부분 실패:** DB 커밋 후 외부 확인 실패는 `503 security_record_pending`(`db_committed: true`, `security_recorded: false`)이며 DB 변경을 유지한다. 작업 ID로 원 이벤트를 찾아 원 작업의 외부 커밋 확인만 재시도한다. 탈퇴는 9.2절 완료 경로를 사용한다. 서버 작업도 미확인 이벤트를 재처리한다.
 - **롤백·불확실성:** 확인된 롤백은 외부에 취소 기록을 남긴다. 복원 시 변경 의도만 있고 커밋·롤백을 확정할 수 없는 기록은 제한·삭제 방향으로 적용하고 운영 확인 대상으로 남긴다. 불확실한 기록으로 접근 허용·계정 복구를 수행하지 않는다.
-- **백업·복원:** 백업 기준점 생성 중 보안 변경을 잠시 막고 진행 중 트랜잭션·외부 확인을 해소한 뒤, DB의 일관된 백업 스냅샷과 외부 저널 기준 순번을 함께 확정한다. 기준점보다 앞선 미확정 의도가 백업 밖에 빠지지 않도록 하며, 이후 변경을 재개한다. 복원은 그 순번 이후부터 서비스 재개 직전까지의 기록을 연속 검증하고 대상별 순서·버전과 `event_id`로 멱등 재적용한다. 사용자 삭제 이벤트는 해당 사용자와 모든 FK 자손의 물리 삭제를 재적용하며 이미 없으면 멱등 성공이다. 탈퇴한 사용자의 계정·멤버십·개인정보 보관 행을 재생성하지 않는다. 사용자 계정이 남아 있는 관리자 해지·비활성화의 경우에만, 대상 멤버십이 백업에 없어도 해지 이력을 재생성하여 OIDC 자동 추가나 일반 멤버 추가로 재가입 승인 절차를 우회하는 것을 막는다. 재활성화 기록은 앞선 제한 적용이 확인된 경우에만 순서대로 적용한다.
+- **백업·복원:** 백업 기준점 생성 중 보안 변경을 잠시 막고 진행 중 트랜잭션·외부 확인을 해소한 뒤, DB의 일관된 백업 스냅샷과 외부 저널 기준 순번을 함께 확정한다. 기준점보다 앞선 미확정 의도가 백업 밖에 빠지지 않도록 하며, 이후 변경을 재개한다. 복원은 그 순번 이후부터 서비스 재개 직전까지의 기록을 연속 검증하고 외부 순번에 따른 대상별 기록 순서와 `event_id`로 멱등 재적용한다. 사용자 삭제 이벤트는 해당 사용자와 모든 FK 자손의 물리 삭제를 재적용하며 이미 없으면 멱등 성공이다. 탈퇴한 사용자의 계정·멤버십·개인정보 보관 행을 재생성하지 않는다. 사용자 계정이 남아 있는 관리자 해지·비활성화의 경우에만, 대상 멤버십이 백업에 없어도 해지 이력을 재생성하여 OIDC 자동 추가나 일반 멤버 추가로 재가입 승인 절차를 우회하는 것을 막는다. 재활성화 기록은 앞선 제한 적용이 확인된 경우에만 순서대로 적용한다.
 - **보존:** 모든 보존 백업의 가장 오래된 저널 기준점 이후 기록을 유지한다. 최소 백업 보존기간 30일을 포함하며, 관련 백업의 폐기 및 진행 중 복원 완료 전에는 삭제하지 않는다. 기록·백업의 삭제는 기준점의 연속성을 함께 확인한다.
 
 ## 10. API·요구사항 대응
 
 ### 10.1 API → 테이블
 
-`/sso/api/v1/*` 중계는 원 operation과 같다. `getLiveness`, `getReadiness`는 테이블을 쓰지 않는다. 접근 자격 변경 API는 모두 `idempotency_keys`를 쓰고, 테넌트별 서비스 이용 변경은 `access_version_syncs`도 함께 쓴다. 9.4절 대상은 `security_change_events`도 함께 쓰고, `x-audit-event`가 있는 operation은 모두 `audit_logs`에 쓴다.
+`/sso/api/v1/*` 중계는 원 operation과 같다. `getLiveness`, `getReadiness`는 테이블을 쓰지 않는다. 접근 자격 변경 API는 모두 `idempotency_keys`를 쓴다. 9.4절 대상은 `security_change_events`도 함께 쓰고, `x-audit-event`가 있는 operation은 모두 `audit_logs`에 쓴다.
 
 | API 묶음 | operation | 주로 읽음 | 씀 |
 | --- | --- | --- | --- |
@@ -866,7 +847,7 @@ erDiagram
 | FR-TEN-001~004, D-05 | `tenants` |
 | FR-MEM-001~005, 005-01, 008 | `tenant_memberships.user_id` NOT NULL·FK·부분 UNIQUE, 기존 사용자 추가, 계정 존속 중 `removed` 보존·탈퇴 시 연쇄 삭제 |
 | FR-APP-001~005, 007, D-07 | `applications`, `tenant_applications` |
-| FR-APP-008-01~09 | `tenant_applications.access_version`, `idempotency_keys`, `access_version_syncs`, 8장. Tenant·TenantMembership 버전은 13장 11번 |
+| FR-APP-008-01~09 | 현재 DB 상태의 요청별 직접 검증, `idempotency_keys`, 외부 보안 변경 기록, 8장 |
 | NFR-SEC-006, 008 | 1장 비밀값 저장, 9.2절 개인정보 즉시 삭제 |
 | NFR-SEC-007, 007-01 | `audit_logs` |
 | NFR-OPS-002, 002-01~03 | `security_change_events`, 독립 외부 저널, 9.3~9.4절 |
@@ -877,7 +858,7 @@ erDiagram
 2. **리비전 0001 하나로 전체 생성**: ORM 모델에서 autogenerate하고 다음을 손으로 확인한다.
    - 부분 UNIQUE 인덱스(`postgresql_where`)와 설계한 CHECK가 빠짐없이 들어갔는지. 1장의 CHECK 제외 테이블에는 CHECK가 생성되지 않았는지
    - 이름: 현재 `naming_convention`은 첫 열 이름만 쓴다. 그래서 여러 열 인덱스·UNIQUE와 모든 CHECK는 이 문서의 이름을 명시한다. 예를 들어 `tenant_memberships`의 (`tenant_id`, `membership_status`) 인덱스는 이름을 주지 않으면 `ix_tenant_memberships_tenant_id`가 된다.
-   - 테이블 생성 순서(FK 의존): `users` → `user_securities`, `email_verification_tokens` → `tenants` → `applications` → `tenant_oidc_configurations` → `identities` → `tenant_memberships` → `tenant_applications` → `logins` → `oidc_login_bindings` → `refresh_token_families` → `refresh_tokens` → `bff_sessions` → `oidc_login_transactions` → `identity_link_tickets` → `sso_authorization_codes` → `signing_keys`, `idempotency_keys` → `withdrawal_receipts` → `access_version_syncs`, `security_change_events`, `audit_logs`
+   - 테이블 생성 순서(FK 의존): `users` → `user_securities`, `email_verification_tokens` → `tenants` → `applications` → `tenant_oidc_configurations` → `identities` → `tenant_memberships` → `tenant_applications` → `logins` → `oidc_login_bindings` → `refresh_token_families` → `refresh_tokens` → `bff_sessions` → `oidc_login_transactions` → `identity_link_tickets` → `sso_authorization_codes` → `signing_keys`, `idempotency_keys` → `withdrawal_receipts`, `security_change_events`, `audit_logs`
 3. **권한**: 기본 권한으로 `passport_user`가 DML을 받는다. 0001에서 `REVOKE UPDATE ON audit_logs FROM passport_user`를 실행한다(추가만 가능, 삭제는 보존 기간 작업용으로 남김). 시퀀스는 쓰지 않는다(UUID PK).
 4. **초기 데이터**: 마이그레이션에 넣지 않는다. 플랫폼 관리자는 설치 CLI가 지정하고, 첫 서명 키는 시작 시 또는 CLI로 만든다.
 5. **검증**:
@@ -895,7 +876,7 @@ erDiagram
    - 관리자에 의한 기존 사용자 추가의 즉시 활성화·멱등 재시도와 존재하지 않는 사용자·중복 소속·해지 이력의 추가 거부를 검증한다.
    - 다른 브라우저 콜백 거부, 외부 세션·토큰별 종료 범위를 검증한다.
    - 신뢰 설정 변경 시 기존 로그인·토큰 거부, 미완료 OIDC 트랜잭션·미사용 연결 티켓 취소, 시작·콜백·티켓 소비와 설정 변경의 경합 양쪽 커밋 순서, 표시명 변경 시 기존 로그인·흐름 유지를 검증한다.
-   - Valkey 이전 값 복구, 탈퇴 응답 유실 후 24시간 완료 확인, 외부 기록의 커밋 전·후 실패와 복원 재적용을 통합 검증한다.
+   - 변경 완료 후 기존 허용 캐시·토큰으로 접근 불가, DB 장애 시 검증 실패와 로그인 유지, 탈퇴 응답 유실 후 24시간 완료 확인, 외부 기록의 커밋 전·후 실패와 복원 재적용을 통합 검증한다.
 
 ## 12. 6장 논리 모델과의 차이
 
@@ -904,7 +885,7 @@ erDiagram
 | `TenantOIDCConfiguration.credential_ref` | `client_secret_ciphertext` | **[제안]** 외부 비밀 저장소 없이 설치한다(13장 3번) |
 | `Identity.provider_type` | 없음 | 외부 신원은 OIDC만 있다. Local 인증 정보는 `user_securities`에 둔다 |
 | `AuditEvent`(`actor_id`, `tenant_id`, `action`, `target_id`, `at`) | `audit_logs` + `actor_type`, `result`, `request_id`, `source_ip`, `reason`, `details` | 계약의 `x-audit-event`, 관리자 작업·조회 사유, 계정 삭제 결과를 기록한다 |
-| 없음 | 4.4~4.6절 테이블 | REQUIREMENTS 11장 Phase 1 범위(로그인·토큰·일회성 값·멱등·동기화) |
+| 없음 | 4.4~4.6절 테이블 | REQUIREMENTS 11장 Phase 1 범위(로그인·토큰·일회성 값·멱등·보안 기록) |
 
 ## 13. 설계 결정과 미결·제안 목록
 
@@ -918,4 +899,4 @@ erDiagram
 8. **`last_activity_at` 갱신 단위**: 1분.
 9. **OIDC 로그인 브라우저 바인딩**(필수): `browser_binding_hash`와 트랜잭션 전용 HttpOnly 쿠키를 시작·콜백에서 대조한다(4.5절).
 10. **수명·보관 값**: 이메일 확인 토큰 24시간, OIDC 트랜잭션·링크 티켓 10분, SSO 코드 60초, 멱등 키 24시간, 종료된 로그인 1일 보관, 서명 키 게시 일정.
-11. **테넌트·멤버십 접근 자격 버전**(미결): `tenants`·`tenant_memberships`에는 `access_version`을 두지 않고, 두 단위의 변경은 8장 6의 요청별 DB 상태 검사로 차단한다. REQUIREMENTS FR-APP-008-05·06과 API 계약의 테넌트·멤버십 버전·동기화 설명은 아직 반영하지 않았으므로 대체 설계와 함께 정리해야 한다.
+11. **접근 자격 검증**(확정): 테넌트·멤버십·테넌트별 서비스 이용에 별도 변경 버전을 두지 않는다. 요청마다 DB의 현재 커밋된 상태로 검증하며, SaaS에는 현재 자격을 반환한다. 변경 성공 응답은 DB 커밋과 대상 외부 보안 기록 확인 후 반환한다.
