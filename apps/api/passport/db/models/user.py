@@ -53,7 +53,7 @@ class User(Base):
     """Global Passport account: immutable ID, account status and profile.
 
     One account serves every tenant and SaaS application. user_securities,
-    identities and tenant_memberships all hang off this row.
+    user_identities and tenant_memberships all hang off this row.
 
     - A UserSecurity row is always created in the same transaction.
     - Withdrawal deletes this row and its FK children (see module docstring).
@@ -169,9 +169,9 @@ class Identity(Base):
     (user_securities.password_hash); the hash itself is never returned.
     """
 
-    __tablename__ = "identities"
+    __tablename__ = "user_identities"
     __table_args__ = (
-        UniqueConstraint("issuer", "subject", name="uq_identities_issuer_subject"),
+        UniqueConstraint("issuer", "subject", name="uq_user_identities_issuer_subject"),
     )
 
     identity_id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid7)

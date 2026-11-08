@@ -145,9 +145,9 @@ def test_email_verification_tokens_ddl():
     )
 
 
-def test_identities_ddl():
+def test_user_identities_ddl():
     assert ddl(Identity) == (
-        "CREATE TABLE identities ( "
+        "CREATE TABLE user_identities ( "
         "identity_id UUID NOT NULL, "
         "user_id UUID NOT NULL, "
         "issuer VARCHAR(2048) NOT NULL, "
@@ -156,16 +156,16 @@ def test_identities_ddl():
         "config_id UUID NOT NULL, "
         "linked_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, "
         "last_used_at TIMESTAMP WITH TIME ZONE, "
-        "CONSTRAINT pk_identities PRIMARY KEY (identity_id), "
-        "CONSTRAINT uq_identities_issuer_subject UNIQUE (issuer, subject), "
-        "CONSTRAINT fk_identities_user_id_users FOREIGN KEY(user_id) "
+        "CONSTRAINT pk_user_identities PRIMARY KEY (identity_id), "
+        "CONSTRAINT uq_user_identities_issuer_subject UNIQUE (issuer, subject), "
+        "CONSTRAINT fk_user_identities_user_id_users FOREIGN KEY(user_id) "
         "REFERENCES users (user_id) ON DELETE CASCADE, "
-        "CONSTRAINT fk_identities_tenant_id_tenants FOREIGN KEY(tenant_id) "
+        "CONSTRAINT fk_user_identities_tenant_id_tenants FOREIGN KEY(tenant_id) "
         "REFERENCES tenants (tenant_id) ON DELETE RESTRICT, "
-        "CONSTRAINT fk_identities_config_id_tenant_oidc_configurations "
+        "CONSTRAINT fk_user_identities_config_id_tenant_oidc_configurations "
         "FOREIGN KEY(config_id) REFERENCES tenant_oidc_configurations (config_id) "
         "ON DELETE RESTRICT ) ; "
-        "CREATE INDEX ix_identities_user_id ON identities (user_id)"
+        "CREATE INDEX ix_user_identities_user_id ON user_identities (user_id)"
     )
 
 
