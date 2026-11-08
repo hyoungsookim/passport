@@ -4,6 +4,8 @@ from sqlalchemy.schema import CreateIndex, CreateTable
 
 from passport.db.base import Base, IntEnumType
 from passport.db.models import (
+    Application,
+    ApplicationStatus,
     EmailVerificationToken,
     Identity,
     MembershipRemovalReason,
@@ -14,6 +16,7 @@ from passport.db.models import (
     OidcValidationStatus,
     PasswordAlgorithm,
     Tenant,
+    TenantApplication,
     TenantMembership,
     TenantOidcConfiguration,
     TenantRole,
@@ -61,6 +64,7 @@ def ddl(model):
         (TenantRole, {"ADMIN": 1, "MEMBER": 2}),
         (MembershipStatus, {"ACTIVE": 2, "SUSPENDED": 3, "REMOVED": 4}),
         (MembershipRemovalReason, {"ADMIN_REMOVED": 1}),
+        (ApplicationStatus, {"ACTIVE": 1, "INACTIVE": 2}),
     ],
 )
 def test_enum_keys_match_db_model(enum, keys):
@@ -232,4 +236,56 @@ def test_tenant_memberships_ddl():
         "CREATE INDEX ix_tenant_memberships_user_id ON tenant_memberships (user_id) ; "
         "CREATE UNIQUE INDEX uq_tenant_memberships_tenant_user "
         "ON tenant_memberships (tenant_id, user_id) WHERE membership_status <> 4"
+    )
+
+
+def test_applications_ddl():
+    assert ddl(Application) == (
+        "CREATE TABLE applications ( "
+        "application_id UUID NOT NULL, "
+        "application_code VARCHAR(32) NOT NULL, "
+        "application_name VARCHAR(100) NOT NULL, "
+        "application_status SMALLINT DEFAULT 1 NOT NULL, "
+        "client_secret_hash BYTEA NOT NULL, "
+        "previous_client_secret_hash BYTEA, "
+        "previous_secret_valid_until TIMESTAMP WITH TIME ZONE, "
+        "secret_rotated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, "
+        "bff_redirect_uris TEXT[] DEFAULT '{}' NOT NULL, "
+        "created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, "
+        "updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, "
+        "created_by UUID NOT NULL, "
+        "updated_by UUID NOT NULL, "
+        "external_id VARCHAR(50), "
+        "external_source VARCHAR(50), "
+        "CONSTRAINT pk_applications PRIMARY KEY (application_id), "
+        "CONSTRAINT ck_applications_application_status_enum "
+        "CHECK (application_status IN (1, 2)), "
+        "CONSTRAINT ck_applications_application_code "
+        "CHECK (application_code ~ '^[a-z][a-z0-9-]{1,30}[a-z0-9]$' "
+        "AND application_code <> 'passport'), "
+        "CONSTRAINT ck_applications_previous_secret "
+        "CHECK ((previous_client_secret_hash IS NULL) = "
+        "(previous_secret_valid_until IS NULL)), "
+        "CONSTRAINT uq_applications_application_code UNIQUE (application_code) )"
+    )
+
+
+def test_tenant_applications_ddl():
+    assert ddl(TenantApplication) == (
+        "CREATE TABLE tenant_applications ( "
+        "tenant_id UUID NOT NULL, "
+        "application_id UUID NOT NULL, "
+        "application_status SMALLINT NOT NULL, "
+        "created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, "
+        "created_by UUID NOT NULL, "
+        "CONSTRAINT pk_tenant_applications PRIMARY KEY (tenant_id, application_id), "
+        "CONSTRAINT ck_tenant_applications_application_status_enum "
+        "CHECK (application_status IN (1, 2)), "
+        "CONSTRAINT fk_tenant_applications_tenant_id_tenants FOREIGN KEY(tenant_id) "
+        "REFERENCES tenants (tenant_id) ON DELETE RESTRICT, "
+        "CONSTRAINT fk_tenant_applications_application_id_applications "
+        "FOREIGN KEY(application_id) REFERENCES applications (application_id) "
+        "ON DELETE RESTRICT ) ; "
+        "CREATE INDEX ix_tenant_applications_application_id "
+        "ON tenant_applications (application_id)"
     )

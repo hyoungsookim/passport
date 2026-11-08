@@ -1,5 +1,10 @@
 """Database model definitions."""
 
+from passport.db.models.application import (
+    Application,
+    ApplicationStatus,
+    TenantApplication,
+)
 from passport.db.models.tenant import (
     MembershipRemovalReason,
     MembershipStatus,
@@ -23,6 +28,8 @@ from passport.db.models.user import (
 )
 
 __all__ = [
+    "Application",
+    "ApplicationStatus",
     "EmailVerificationToken",
     "Identity",
     "MembershipRemovalReason",
@@ -33,6 +40,7 @@ __all__ = [
     "OidcValidationStatus",
     "PasswordAlgorithm",
     "Tenant",
+    "TenantApplication",
     "TenantMembership",
     "TenantOidcConfiguration",
     "TenantRole",
