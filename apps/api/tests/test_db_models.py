@@ -497,7 +497,10 @@ def test_auth_sessions_ddl():
         "CONSTRAINT fk_auth_sessions_user_session_id_user_sessions "
         "FOREIGN KEY(user_session_id) REFERENCES user_sessions (user_session_id) "
         "ON DELETE CASCADE, "
-        "CONSTRAINT uq_auth_sessions_ticket_hash UNIQUE (ticket_hash) )"
+        "CONSTRAINT uq_auth_sessions_ticket_hash UNIQUE (ticket_hash) ) ; "
+        "CREATE INDEX ix_auth_sessions_expires_at ON auth_sessions (expires_at) ; "
+        "CREATE INDEX ix_auth_sessions_user_session_id "
+        "ON auth_sessions (user_session_id)"
     )
 
 
@@ -524,5 +527,9 @@ def test_authorization_codes_ddl():
         "REFERENCES tenants (tenant_id) ON DELETE RESTRICT, "
         "CONSTRAINT fk_authorization_codes_refresh_family_id_client_sessions "
         "FOREIGN KEY(refresh_family_id) REFERENCES client_sessions "
-        "(client_session_id) ON DELETE CASCADE )"
+        "(client_session_id) ON DELETE CASCADE ) ; "
+        "CREATE INDEX ix_authorization_codes_expires_at "
+        "ON authorization_codes (expires_at) ; "
+        "CREATE INDEX ix_authorization_codes_user_session_id "
+        "ON authorization_codes (user_session_id)"
     )

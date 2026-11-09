@@ -100,12 +100,14 @@ class AuthSession(Base):
     intent: Mapped[OidcIntent] = mapped_column(IntEnumType(OidcIntent))
     # Registered portal completion URI.
     return_to: Mapped[str] = mapped_column(String(2048))
-    # Session a LINK or REAUTH flow belongs to; deleted with it.
+    # Session a LINK or REAUTH flow belongs to; deleted with it. Indexed for
+    # that cascade.
     user_session_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("user_sessions.user_session_id", ondelete="CASCADE")
+        ForeignKey("user_sessions.user_session_id", ondelete="CASCADE"), index=True
     )
-    # Callback expiry. Proposed: 10 minutes after start.
-    expires_at: Mapped[datetime]
+    # Callback expiry. Proposed: 10 minutes after start. Indexed for the
+    # cleanup job.
+    expires_at: Mapped[datetime] = mapped_column(index=True)
     # When the callback was consumed; separate from ticket consumption.
     consumed_at: Mapped[datetime | None]
     # --- Link ticket fields (see ck_auth_sessions_ticket) ---
@@ -139,17 +141,17 @@ class AuthorizationCode(Base):
     # Application code that requested the code.
     client_id: Mapped[str] = mapped_column(String(32))
     redirect_uri: Mapped[str] = mapped_column(String(2048))
-    # Original user session; deleted with it.
+    # Original user session; deleted with it. Indexed for that cascade.
     user_session_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("user_sessions.user_session_id", ondelete="CASCADE")
+        ForeignKey("user_sessions.user_session_id", ondelete="CASCADE"), index=True
     )
     tenant_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("tenants.tenant_id", ondelete="RESTRICT")
     )
     # PKCE S256 code challenge.
     code_challenge: Mapped[str] = mapped_column(String(128))
-    # Proposed: 60 seconds after issue.
-    expires_at: Mapped[datetime]
+    # Proposed: 60 seconds after issue. Indexed for the cleanup job.
+    expires_at: Mapped[datetime] = mapped_column(index=True)
     consumed_at: Mapped[datetime | None]
     # Family created by the exchange; revoked if the code is replayed.
     refresh_family_id: Mapped[uuid.UUID | None] = mapped_column(

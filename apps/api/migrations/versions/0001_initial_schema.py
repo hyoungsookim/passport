@@ -557,6 +557,18 @@ def upgrade() -> None:
         sa.UniqueConstraint("state_hash", name=op.f("uq_auth_sessions_state_hash")),
         sa.UniqueConstraint("ticket_hash", name=op.f("uq_auth_sessions_ticket_hash")),
     )
+    op.create_index(
+        op.f("ix_auth_sessions_expires_at"),
+        "auth_sessions",
+        ["expires_at"],
+        unique=False,
+    )
+    op.create_index(
+        op.f("ix_auth_sessions_user_session_id"),
+        "auth_sessions",
+        ["user_session_id"],
+        unique=False,
+    )
     op.create_table(
         "client_sessions",
         sa.Column("client_session_id", sa.Uuid(), nullable=False),
@@ -685,6 +697,18 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id", name=op.f("pk_authorization_codes")),
         sa.UniqueConstraint("code_hash", name=op.f("uq_authorization_codes_code_hash")),
     )
+    op.create_index(
+        op.f("ix_authorization_codes_expires_at"),
+        "authorization_codes",
+        ["expires_at"],
+        unique=False,
+    )
+    op.create_index(
+        op.f("ix_authorization_codes_user_session_id"),
+        "authorization_codes",
+        ["user_session_id"],
+        unique=False,
+    )
     op.create_table(
         "refresh_tokens",
         sa.Column("refresh_token_id", sa.Uuid(), nullable=False),
@@ -725,6 +749,12 @@ def downgrade() -> None:
         postgresql_where=sa.text("rotated_at IS NULL"),
     )
     op.drop_table("refresh_tokens")
+    op.drop_index(
+        op.f("ix_authorization_codes_user_session_id"), table_name="authorization_codes"
+    )
+    op.drop_index(
+        op.f("ix_authorization_codes_expires_at"), table_name="authorization_codes"
+    )
     op.drop_table("authorization_codes")
     op.drop_index(
         "ix_session_bindings_binding_kind_binding_hash", table_name="session_bindings"
@@ -734,6 +764,8 @@ def downgrade() -> None:
         op.f("ix_client_sessions_user_session_id"), table_name="client_sessions"
     )
     op.drop_table("client_sessions")
+    op.drop_index(op.f("ix_auth_sessions_user_session_id"), table_name="auth_sessions")
+    op.drop_index(op.f("ix_auth_sessions_expires_at"), table_name="auth_sessions")
     op.drop_table("auth_sessions")
     op.drop_index(
         "ix_user_sessions_user_id",

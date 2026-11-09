@@ -516,6 +516,7 @@ OIDC 콜백과 SSO 코드는 해시로 찾고 `UPDATE … SET consumed_at = now(
 - CHECK `ck_auth_sessions_browser_binding_hash`: `octet_length(browser_binding_hash) = 32`
 - CHECK `ck_auth_sessions_intent`: `(intent = 1) = (user_session_id IS NULL)`
 - CHECK `ck_auth_sessions_ticket`: `(ticket_hash IS NULL AND issuer IS NULL AND subject IS NULL AND ticket_issued_at IS NULL AND ticket_expires_at IS NULL AND ticket_consumed_at IS NULL) OR (ticket_hash IS NOT NULL AND issuer IS NOT NULL AND subject IS NOT NULL AND ticket_issued_at IS NOT NULL AND ticket_expires_at IS NOT NULL AND consumed_at IS NOT NULL AND intent IN (1, 2))`
+- 인덱스 `user_session_id`(로그인 정리·탈퇴의 연쇄 삭제), `expires_at`(정리 작업)
 - BFF 시작 경로가 트랜잭션마다 256비트 난수를 만들어 `__Host-passport_oidc_<id>` 쿠키(`HttpOnly; Secure; SameSite=Lax; Path=/`, `Domain` 없음)에 둔다. 만료는 트랜잭션과 같고 값은 JSON·URL에 반환하지 않는다. 병렬 로그인은 별도 쿠키를 사용한다.
 - 콜백은 **소비 전에** 해당 쿠키의 해시를 대조한다. 누락·불일치면 거부하며 세션 생성·신원 연결·재인증을 수행하지 않는다. 성공 또는 정상적인 종결 시 쿠키를 지운다. `state`·`nonce`·PKCE 검증도 함께 유지한다.
 - 시작 시 5.4절의 순서로 테넌트·설정 행을 잠그고 활성 설정으로 트랜잭션을 생성한다. 콜백은 외부 검증 후 결과를 저장하기 전에 같은 순서로 잠그고 트랜잭션을 DB에서 다시 조회하여 존재·미소비·미만료와 설정 활성 상태를 재검증한 뒤 소비한다. 신뢰 변경으로 삭제된 트랜잭션의 인증 결과는 반영하지 않는다.
@@ -543,6 +544,8 @@ OIDC 콜백과 SSO 코드는 해시로 찾고 `UPDATE … SET consumed_at = now(
 | `consumed_at` | timestamptz | 예 | | |
 | `refresh_family_id` | uuid | 예 | | FK `client_sessions`(`client_session_id`) `CASCADE`. 교환으로 만든 계열. 코드가 다시 오면 이 계열을 폐기한다 |
 | `created_at` | timestamptz | | `now()` | |
+
+- 인덱스 `user_session_id`(로그인 정리·탈퇴의 연쇄 삭제), `expires_at`(정리 작업)
 
 ### 4.6 운영
 
