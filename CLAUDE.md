@@ -2,104 +2,105 @@
 
 
 
-## Goals
+## 목표
 
-Implement a unified Identity & Tenant Management Platform for enterprise SaaS services.
+기업용 SaaS 서비스를 위한 통합 ID 및 테넌트 관리 플랫폼을 구현한다.
 
-Passport aims to provide secure and consistent authentication, user identity, account, and tenant management that can be shared across enterprise SaaS services.
+Passport는 기업용 SaaS 서비스 전반에서 공유할 수 있는 안전하고 일관된 인증, 사용자 ID, 계정 및 테넌트 관리 기능을 제공하는 것을 목표로 한다.
 
-This allows users to access multiple SaaS services with a single identity and enterprises to manage users and tenants centrally. It also allows each SaaS service to focus on its own business functionality without duplicating authentication and common user management features.
+이를 통해 사용자는 하나의 ID로 여러 SaaS 서비스에 접근할 수 있고, 기업은 사용자와 테넌트를 중앙에서 관리할 수 있다. 또한 각 SaaS 서비스는 인증 및 공통 사용자 관리 기능을 중복 구현하지 않고 고유한 비즈니스 기능에 집중할 수 있다.
 
 
-## Technology Stack
+## 기술 스택
 
-Language: Python 3.15.1
-Dependency and Virtual environment management: uv
-Type Checker: ty
-Lint: ruff
+언어: Python 3.15.1
+의존성 및 가상 환경 관리: uv
+타입 검사: ty
+린트: ruff
 
-Framework: FastAPI[standard] >= 0.162 
+프레임워크: FastAPI[standard] >= 0.162
 ASGI: Uvicorn[standard] >= 0.54 
 ORM: SQLAlchemy[asyncio] >= 2.1.6
-Background Job: Celery >= 5.6.3
+백그라운드 작업: Celery >= 5.6.3
 
-Database Migration: Alembic >= 1.20
-Database Driver: Psycopg[binary,pool] >= 3.3.6
-Database: PostgreSQL 18
-Cache: Valkey
+데이터베이스 마이그레이션: Alembic >= 1.20
+데이터베이스 드라이버: Psycopg[binary,pool] >= 3.3.6
+데이터베이스: PostgreSQL 18
+캐시: Valkey
 
-Unit test: pytest, pytest-asyncio
-Coverage: pytest-cov
+단위 테스트: pytest, pytest-asyncio
+테스트 커버리지: pytest-cov
 
-Passport must be delivered as a single package that automatically performs a basic installation of the application and supporting software, such as PostgreSQL and Valkey, when customers install the package. It must therefore avoid complex installation procedures and excessive infrastructure requirements.
-
-
-
-## Coding Guidelines
-
-1. Think Before Coding
-
-Do not make assumptions without checking them. Do not hide uncertainty. Make tradeoffs explicit.
-
-Before implementing:
-
-- State your assumptions explicitly. Ask if you are unsure.
-- If multiple interpretations are possible, present them. Do not arbitrarily choose one and proceed.
-- If there is a simpler approach, say so. Push back when warranted.
-- If something is unclear, stop. Explain what is confusing and ask for clarification.
-
-2. Simplicity First
-
-Write the minimum code needed to solve the problem. Include nothing unnecessary.
-
-- Do not add features that were not requested.
-- Do not create abstractions for code used only once.
-- Do not add "flexibility" or "configurability" that was not requested.
-- Do not add error handling for situations that cannot occur.
-- If you write 200 lines that could be reduced to 50, rewrite them.
-
-Ask yourself: "Would a senior engineer consider this overly complex?" If so, simplify it.
-
-3. Surgical Changes
-
-Change only what is necessary. Clean up only issues introduced by your changes.
-
-When modifying existing code:
-
-- Do not "improve" unrelated code, comments, or formatting.
-- Do not refactor code that works correctly.
-- Follow the existing style, even if you prefer your own.
-- If you find unrelated dead code, mention it without deleting it.
-
-When your changes leave orphaned code:
-
-- Remove imports, variables, and functions that become unused because of your changes.
-- Do not remove pre-existing dead code unless the user requests it.
-
-Validation criterion: Every changed line must be directly traceable to the user's request.
-
-4. Write Pythonic Code
-
-- Follow PEP 8 for Python code.
-- Use comprehensions whenever code can be expressed as a comprehension.
-- Use conditional expressions whenever applicable.
-- Write idiomatic Python code.
-- After completing an implementation, write tests and ensure that all tests pass, with no errors or warnings from ruff or ty.
+Passport는 고객이 패키지를 설치하면 애플리케이션과 PostgreSQL, Valkey 등의 지원 소프트웨어에 대한 기본 설치가 자동으로 수행되는 단일 패키지로 제공해야 한다. 따라서 복잡한 설치 절차와 과도한 인프라 요구사항을 피해야 한다.
 
 
-## Requirements
 
-Refer to docs/REQUIREMENTS.md for the core functional requirements.
+## 코딩 지침
+
+1. 코딩 전에 생각하기
+
+확인하지 않은 채 가정하지 않는다. 불확실성을 숨기지 않는다. 선택에 따른 장단점을 명확히 밝힌다.
+
+구현하기 전에:
+
+- 가정을 명시적으로 밝힌다. 확신이 없다면 질문한다.
+- 여러 해석이 가능하면 모두 제시한다. 임의로 하나를 선택해 진행하지 않는다.
+- 더 간단한 접근법이 있다면 제안한다. 필요하다면 이견을 제시한다.
+- 불명확한 부분이 있다면 멈춘다. 무엇이 혼란스러운지 설명하고 명확한 설명을 요청한다.
+
+2. 단순함을 우선하기
+
+문제를 해결하는 데 필요한 최소한의 코드만 작성한다. 불필요한 것은 포함하지 않는다.
+
+- 요청하지 않은 기능을 추가하지 않는다.
+- 한 번만 사용하는 코드를 위해 추상화를 만들지 않는다.
+- 요청하지 않은 "유연성"이나 "설정 가능성"을 추가하지 않는다.
+- 발생할 수 없는 상황에 대한 오류 처리를 추가하지 않는다.
+- 작성한 200줄의 코드를 50줄로 줄일 수 있다면 다시 작성한다.
+
+"시니어 엔지니어가 이 코드를 지나치게 복잡하다고 생각할까?"라고 자문한다. 그렇다면 단순화한다.
+
+3. 필요한 부분만 수정하기
+
+필요한 부분만 변경한다. 자신의 변경으로 발생한 문제만 정리한다.
+
+기존 코드를 수정할 때:
+
+- 관련 없는 코드, 주석, 서식을 "개선"하지 않는다.
+- 올바르게 동작하는 코드를 리팩터링하지 않는다.
+- 자신이 선호하는 스타일이 있더라도 기존 스타일을 따른다.
+- 관련 없는 미사용 코드를 발견하면 삭제하지 않고 언급만 한다.
+
+자신의 변경으로 사용되지 않는 코드가 생겼을 때:
+
+- 자신의 변경으로 사용되지 않게 된 임포트, 변수, 함수를 제거한다.
+- 사용자가 요청하지 않는 한 기존의 미사용 코드를 제거하지 않는다.
+
+검증 기준: 변경한 모든 줄은 사용자의 요청과 직접적인 연관이 있어야 한다.
+
+4. 파이썬다운 코드 작성하기
+
+- Python 코드는 PEP 8을 따른다.
+- 컴프리헨션으로 표현할 수 있는 코드는 컴프리헨션을 사용한다.
+- 적용할 수 있는 경우 조건 표현식을 사용한다.
+- Python의 관용적인 표현을 사용해 코드를 작성한다.
+- 구현을 완료한 뒤 테스트를 작성하고, 모든 테스트가 통과하며 ruff와 ty에서 오류나 경고가 발생하지 않는지 확인한다.
+
+
+## 요구사항
+
+핵심 기능 요구사항은 docs/REQUIREMENTS.md를 참고한다.
+
 
 ## graphify
 
-This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
+이 프로젝트는 graphify-out/에 god 노드, 커뮤니티 구조, 파일 간 관계를 포함하는 지식 그래프를 갖추고 있다.
 
-When the user types `/graphify`, use the installed graphify skill or instructions before doing anything else.
+사용자가 `/graphify`를 입력하면 다른 작업을 하기 전에 설치된 graphify 스킬이나 지침을 따른다.
 
-Rules:
-- For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
-- Dirty graphify-out/ files are expected after hooks or incremental updates; dirty graph files are not a reason to skip graphify. Only skip graphify if the task is about stale or incorrect graph output, or the user explicitly says not to use it.
-- If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
-- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
-- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
+규칙:
+- 코드베이스에 관한 질문을 받으면 graphify-out/graph.json이 존재하는 경우 먼저 `graphify query "<question>"`을 실행한다. 관계를 확인할 때는 `graphify path "<A>" "<B>"`를, 특정 개념을 살펴볼 때는 `graphify explain "<concept>"`를 사용한다. 이 명령들은 범위가 제한된 하위 그래프를 반환하며, 결과는 보통 GRAPH_REPORT.md나 원시 grep 출력보다 훨씬 작다.
+- 훅이나 증분 업데이트 이후 graphify-out/ 파일에 변경 사항이 생기는 것은 정상이다. 그래프 파일에 변경 사항이 있다는 이유로 graphify를 건너뛰지 않는다. 오래되었거나 잘못된 그래프 출력을 다루는 작업이거나 사용자가 명시적으로 사용하지 말라고 한 경우에만 graphify를 건너뛴다.
+- graphify-out/wiki/index.md가 존재하면 소스를 직접 탐색하는 대신 전체적인 구조를 파악하는 데 이 파일을 사용한다.
+- 전체 아키텍처를 검토하거나 query/path/explain으로 충분한 맥락을 얻지 못한 경우에만 graphify-out/GRAPH_REPORT.md를 읽는다.
+- 코드를 수정한 뒤에는 `graphify update .`를 실행해 그래프를 최신 상태로 유지한다(AST만 사용하며 API 비용은 발생하지 않음).
