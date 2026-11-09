@@ -563,7 +563,7 @@ def upgrade() -> None:
         sa.Column("user_session_id", sa.Uuid(), nullable=False),
         sa.Column("client_id", sa.String(length=32), nullable=False),
         sa.Column("revoked_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("sesstion_id", sa.Uuid(), nullable=True),
+        sa.Column("session_id", sa.Uuid(), nullable=True),
         sa.Column("session_hash", sa.LargeBinary(), nullable=True),
         sa.Column("refresh_token_ciphertext", sa.LargeBinary(), nullable=True),
         sa.Column("tenant_id", sa.Uuid(), nullable=True),
@@ -582,7 +582,7 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.CheckConstraint(
-            "(session_hash IS NULL AND sesstion_id IS NULL AND refresh_token_ciphertext IS NULL AND tenant_id IS NULL AND access_token_ciphertext IS NULL AND access_token_expires_at IS NULL) OR (session_hash IS NOT NULL AND sesstion_id IS NOT NULL AND refresh_token_ciphertext IS NOT NULL AND client_id = 'passport-portal' AND revoked_at IS NULL)",
+            "(session_hash IS NULL AND session_id IS NULL AND refresh_token_ciphertext IS NULL AND tenant_id IS NULL AND access_token_ciphertext IS NULL AND access_token_expires_at IS NULL) OR (session_hash IS NOT NULL AND session_id IS NOT NULL AND refresh_token_ciphertext IS NOT NULL AND client_id = 'passport-portal' AND revoked_at IS NULL)",
             name=op.f("ck_client_sessions_browser"),
         ),
         sa.CheckConstraint(
@@ -605,7 +605,7 @@ def upgrade() -> None:
         sa.UniqueConstraint(
             "session_hash", name=op.f("uq_client_sessions_session_hash")
         ),
-        sa.UniqueConstraint("sesstion_id", name=op.f("uq_client_sessions_sesstion_id")),
+        sa.UniqueConstraint("session_id", name=op.f("uq_client_sessions_session_id")),
     )
     op.create_index(
         op.f("ix_client_sessions_user_session_id"),
@@ -687,7 +687,7 @@ def upgrade() -> None:
     )
     op.create_table(
         "refresh_tokens",
-        sa.Column("id", sa.Uuid(), nullable=False),
+        sa.Column("refresh_token_id", sa.Uuid(), nullable=False),
         sa.Column("family_id", sa.Uuid(), nullable=False),
         sa.Column("token_hash", sa.LargeBinary(), nullable=False),
         sa.Column(
@@ -703,7 +703,7 @@ def upgrade() -> None:
             name=op.f("fk_refresh_tokens_family_id_client_sessions"),
             ondelete="CASCADE",
         ),
-        sa.PrimaryKeyConstraint("id", name=op.f("pk_refresh_tokens")),
+        sa.PrimaryKeyConstraint("refresh_token_id", name=op.f("pk_refresh_tokens")),
         sa.UniqueConstraint("token_hash", name=op.f("uq_refresh_tokens_token_hash")),
     )
     op.create_index(

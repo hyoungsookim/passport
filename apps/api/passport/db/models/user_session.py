@@ -225,7 +225,7 @@ class ClientSession(Base):
       transaction. The row lock serializes concurrent refreshes.
     - The cookie is looked up by session_hash and always requires
       revoked_at IS NULL and a currently valid user session. Public IDs
-      (client_session_id, sesstion_id) never stand in for the cookie.
+      (client_session_id, session_id) never stand in for the cookie.
     - Logout, session end, family revocation and restore set every browser
       field to NULL and touch updated_at. The family and its token history
       stay until the user session is purged; withdrawal cascades them.
@@ -233,6 +233,17 @@ class ClientSession(Base):
 
     __tablename__ = "client_sessions"
     __table_args__ = (
+        # Browser fields are all NULL, or set together on an unrevoked portal
+        # family (tenant and stored Access Token may still be NULL).
+        CheckConstraint(
+            "(session_hash IS NULL AND session_id IS NULL "
+            "AND refresh_token_ciphertext IS NULL AND tenant_id IS NULL "
+            "AND access_token_ciphertext IS NULL AND access_token_expires_at IS NULL) "
+            "OR (session_hash IS NOT NULL AND session_id IS NOT NULL "
+            "AND refresh_token_ciphertext IS NOT NULL "
+            "AND client_id = 'passport-portal' AND revoked_at IS NULL)",
+            name="browser",
+        ),
         CheckConstraint(
             "(access_token_ciphertext IS NULL) = (access_token_expires_at IS NULL)",
             name="access_token",
@@ -255,8 +266,8 @@ class ClientSession(Base):
     revoked_at: Mapped[datetime | None]
     # --- Portal browser session fields (see ck_client_sessions_browser) ---
     # Public browser session ID (UUIDv7) assigned when the portal session is
-    # created. Spelling kept as specified; distinct from client_session_id.
-    sesstion_id: Mapped[uuid.UUID | None] = mapped_column(unique=True)
+    # created. Distinct from client_session_id.
+    session_id: Mapped[uuid.UUID | None] = mapped_column(unique=True)
     # SHA-256 of the portal session cookie value.
     session_hash: Mapped[bytes | None] = mapped_column(unique=True)
     # Encrypted refresh token the portal uses for its next refresh.
@@ -295,7 +306,9 @@ class RefreshToken(Base):
         ),
     )
 
-    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid7)
+    refresh_token_id: Mapped[uuid.UUID] = mapped_column(
+        primary_key=True, default=uuid.uuid7
+    )
     family_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("client_sessions.client_session_id", ondelete="CASCADE")
     )

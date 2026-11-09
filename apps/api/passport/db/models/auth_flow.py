@@ -65,6 +65,18 @@ class AuthSession(Base):
             f"(intent = {OidcIntent.LOGIN.value}) = (user_session_id IS NULL)",
             name="intent",
         ),
+        # Ticket fields are all NULL, or set together once the callback is
+        # consumed; only LOGIN and LINK get a ticket.
+        CheckConstraint(
+            "(ticket_hash IS NULL AND issuer IS NULL AND subject IS NULL "
+            "AND ticket_issued_at IS NULL AND ticket_expires_at IS NULL "
+            "AND ticket_consumed_at IS NULL) "
+            "OR (ticket_hash IS NOT NULL AND issuer IS NOT NULL "
+            "AND subject IS NOT NULL AND ticket_issued_at IS NOT NULL "
+            "AND ticket_expires_at IS NOT NULL AND consumed_at IS NOT NULL "
+            f"AND intent IN ({OidcIntent.LOGIN.value}, {OidcIntent.LINK.value}))",
+            name="ticket",
+        ),
     )
 
     auth_session_id: Mapped[uuid.UUID] = mapped_column(

@@ -17,7 +17,7 @@ Phase 2의 ORM(`passport/db/models/`)과 초기 Alembic 마이그레이션은 �
 | --- | --- |
 | DBMS | PostgreSQL 18, 스키마 `public` |
 | 테이블 이름 | 복수형 snake_case(`users`, `tenant_memberships`). PostgreSQL 예약어 `user`를 피한다 |
-| 기본 키 | `users`·`user_identities`·`tenants`·`tenant_oidc_configurations`·`tenant_memberships`·`user_sessions`·`client_sessions`·`auth_sessions`는 `<엔터티>_id uuid`(`user_id`, `identity_id`, `tenant_id`, `config_id`, `membership_id`, `user_session_id`, `client_session_id`, `auth_session_id`), 나머지 테이블은 `id uuid`. 값은 애플리케이션에서 `uuid.uuid7()`로 만든다. 시간순이라 인덱스 지역성이 좋고 계약의 ID 예시 형식과 같다. 1:1 확장 테이블은 부모 키를 PK로 쓴다 |
+| 기본 키 | `users`·`user_identities`·`tenants`·`tenant_oidc_configurations`·`tenant_memberships`·`user_sessions`·`client_sessions`·`refresh_tokens`·`auth_sessions`·`audit_logs`는 `<엔터티>_id uuid`(`user_id`, `identity_id`, `tenant_id`, `config_id`, `membership_id`, `user_session_id`, `client_session_id`, `refresh_token_id`, `auth_session_id`, `log_id`), 나머지 테이블은 `id uuid`. 값은 애플리케이션에서 `uuid.uuid7()`로 만든다. 시간순이라 인덱스 지역성이 좋고 계약의 ID 예시 형식과 같다. 1:1 확장 테이블은 부모 키를 PK로 쓴다 |
 | 시각 | `timestamptz`, UTC. `created_at`·`updated_at`의 기본값은 `now()` |
 | 열거 값 | Python `enum.IntEnum`의 명시적 정수 키(`.value`)를 PostgreSQL `smallint`에 저장한다. CHECK 적용 범위는 1.1절을 따른다 |
 | 이메일 | 소문자 정규화 값만 저장한다(계약 `Email`). `users.user_email`은 애플리케이션에서 정규화·검증한다 |
@@ -413,7 +413,7 @@ erDiagram
 | `binding_hash` | bytea | | | PK. 검증한 외부 `sid` 또는 철회 대상 토큰 식별자의 SHA-256 |
 | `created_at` | timestamptz | | `now()` | |
 
-- CHECK `ck_session_bindings_binding_kind_enum`, CHECK `ck_session_bindings_hash`: `octet_length(binding_hash) = 32`
+- CHECK `ck_session_bindings_hash`: `octet_length(binding_hash) = 32`
 - 인덱스 (`binding_kind`, `binding_hash`). 조회 시 `user_sessions`와 조인해 `tenant_id`, `config_id`와 로그인 종료 상태를 확인한다. 외부 토큰 원문은 보관하지 않는다.
 - 신뢰할 수 있는 통지의 대상 식별자와 일치하는 로그인만 종료한다. 식별자가 없거나 매핑되지 않는 통지는 거부·감사하며, `(issuer, subject)`만으로 종료 범위를 넓히지 않는다. 외부 계정 차단은 별도로 해당 신원·테넌트의 로그인 전체를 종료한다.
 
@@ -429,7 +429,7 @@ erDiagram
 | `user_session_id` | uuid | | | FK `user_sessions`(`user_session_id`) `CASCADE` |
 | `client_id` | varchar(32) | | | `passport-portal`, `passport-native` 또는 Application `code`. Access Token `client_id` |
 | `revoked_at` | timestamptz | 예 | | 계열만 폐기할 때. SSO 코드 재사용 등 |
-| `sesstion_id` | uuid | 예 | | UNIQUE. 포털 브라우저 세션을 생성할 때 UUIDv7 부여. 요청한 철자를 유지하며 계열 PK `client_session_id`와 구분 |
+| `session_id` | uuid | 예 | | UNIQUE. 포털 브라우저 세션을 생성할 때 UUIDv7 부여. 계열 PK `client_session_id`와 구분 |
 | `session_hash` | bytea | 예 | | UNIQUE. 포털 세션 쿠키 값의 SHA-256. 브라우저 세션이 없으면 NULL |
 | `refresh_token_ciphertext` | bytea | 예 | | 포털 SSO가 다음 갱신에 쓸 Refresh Token |
 | `tenant_id` | uuid | 예 | | FK `tenants`. 포털에서 현재 선택한 테넌트 |
@@ -439,10 +439,10 @@ erDiagram
 | `updated_at` | timestamptz | | `now()` | 계열·브라우저 정보 변경 시 갱신 |
 
 - 인덱스 `user_session_id`
-- 브라우저 필드는 `sesstion_id`, `session_hash`, `refresh_token_ciphertext`, `tenant_id`, `access_token_ciphertext`, `access_token_expires_at`이다. 포털의 `client_id = 'passport-portal'`에서만 사용하며, 네이티브·SaaS 계열과 브라우저 세션 정리 후에는 모두 NULL이다.
-- CHECK `ck_client_sessions_browser`: `(session_hash IS NULL AND sesstion_id IS NULL AND refresh_token_ciphertext IS NULL AND tenant_id IS NULL AND access_token_ciphertext IS NULL AND access_token_expires_at IS NULL) OR (session_hash IS NOT NULL AND sesstion_id IS NOT NULL AND refresh_token_ciphertext IS NOT NULL AND client_id = 'passport-portal' AND revoked_at IS NULL)`
+- 브라우저 필드는 `session_id`, `session_hash`, `refresh_token_ciphertext`, `tenant_id`, `access_token_ciphertext`, `access_token_expires_at`이다. 포털의 `client_id = 'passport-portal'`에서만 사용하며, 네이티브·SaaS 계열과 브라우저 세션 정리 후에는 모두 NULL이다.
+- CHECK `ck_client_sessions_browser`: `(session_hash IS NULL AND session_id IS NULL AND refresh_token_ciphertext IS NULL AND tenant_id IS NULL AND access_token_ciphertext IS NULL AND access_token_expires_at IS NULL) OR (session_hash IS NOT NULL AND session_id IS NOT NULL AND refresh_token_ciphertext IS NOT NULL AND client_id = 'passport-portal' AND revoked_at IS NULL)`
 - CHECK `ck_client_sessions_access_token`: `(access_token_ciphertext IS NULL) = (access_token_expires_at IS NULL)`
-- 쿠키는 `session_hash`로 조회하고, 계열의 `revoked_at IS NULL` 및 연결된 `user_sessions`의 현재 유효성을 항상 확인한다. 공개 식별자인 `client_session_id`·`sesstion_id`로 쿠키 인증을 대신하지 않는다.
+- 쿠키는 `session_hash`로 조회하고, 계열의 `revoked_at IS NULL` 및 연결된 `user_sessions`의 현재 유효성을 항상 확인한다. 공개 식별자인 `client_session_id`·`session_id`로 쿠키 인증을 대신하지 않는다.
 - 포털은 이 행을 `FOR UPDATE`로 잠근 뒤 최신 토큰을 읽고 `refresh_tokens`의 회전과 암호화된 보관 토큰 교체를 같은 트랜잭션에서 처리한다.
 - 로그아웃·로그인 종료·계열 폐기·복원 시 브라우저 필드를 모두 NULL로 비우고 `updated_at`을 갱신한다. 계열 행과 `refresh_tokens`의 회전 이력은 로그인 보존기간까지 유지하며, 사용자 탈퇴 시에는 FK 연쇄 삭제한다.
 
@@ -454,7 +454,7 @@ erDiagram
 
 | 컬럼 | 형식 | NULL | 기본값 | 설명 |
 | --- | --- | --- | --- | --- |
-| `id` | uuid | | UUIDv7 | |
+| `refresh_token_id` | uuid | | UUIDv7 | PK |
 | `family_id` | uuid | | | FK `client_sessions`(`client_session_id`) `CASCADE` |
 | `token_hash` | bytea | | | UNIQUE |
 | `issued_at` | timestamptz | | `now()` | |
@@ -594,7 +594,7 @@ OIDC 콜백과 SSO 코드는 해시로 찾고 `UPDATE … SET consumed_at = now(
 
 | 컬럼 | 형식 | NULL | 기본값 | 설명 |
 | --- | --- | --- | --- | --- |
-| `id` | uuid | | UUIDv7 | |
+| `log_id` | uuid | | UUIDv7 | PK |
 | `occurred_at` | timestamptz | | `now()` | |
 | `action` | smallint | | | `AuditAction`. 계약의 `x-audit-event` 이름(예 `membership.removed`) |
 | `result` | smallint | | | `AuditResult`. `success`, `failure` |
