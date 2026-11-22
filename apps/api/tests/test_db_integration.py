@@ -105,3 +105,14 @@ async def test_api_account_cannot_change_schema(database):
                 await connection.execute(text("CREATE TABLE public.denied (x int)"))
     finally:
         await engine.dispose()
+
+
+async def test_api_account_cannot_update_audit_logs(database):
+    _, url = database
+    engine = create_engine(url, pool_size=1, pool_timeout=5)
+    try:
+        async with engine.connect() as connection:
+            with pytest.raises(ProgrammingError, match="permission denied"):
+                await connection.execute(text("UPDATE audit_logs SET reason = NULL"))
+    finally:
+        await engine.dispose()

@@ -6,6 +6,11 @@ from passport.db.base import Base, IntEnumType
 from passport.db.models import (
     Application,
     ApplicationStatus,
+    AuditAction,
+    AuditActorType,
+    AuditLog,
+    AuditResult,
+    AuditTargetType,
     AuthenticationMethod,
     AuthorizationCode,
     AuthSession,
@@ -100,6 +105,59 @@ def ddl(model):
         (OidcBindingKind, {"SESSION": 1, "TOKEN": 2}),
         (SigningAlgorithm, {"ES256": 1}),
         (OidcIntent, {"LOGIN": 1, "LINK": 2, "REAUTH": 3}),
+        (
+            AuditAction,
+            {
+                "USER_SIGNUP_REQUESTED": 1,
+                "USER_EMAIL_VERIFIED": 2,
+                "AUTH_LOGIN_SUCCEEDED": 3,
+                "AUTH_LOGIN_FAILED": 4,
+                "AUTH_LOGOUT": 5,
+                "AUTH_LOGOUT_ALL": 6,
+                "AUTH_REAUTHENTICATED": 7,
+                "USER_PROFILE_UPDATED": 8,
+                "USER_PASSWORD_CHANGED": 11,
+                "USER_WITHDRAWN": 13,
+                "IDENTITY_LINKED": 14,
+                "TENANT_CREATED": 22,
+                "TENANT_UPDATED": 23,
+                "TENANT_OIDC_CONFIGURATION_CHANGED": 25,
+                "MEMBERSHIP_UPDATED": 27,
+                "MEMBERSHIP_REMOVED": 28,
+                "TENANT_APPLICATION_CHANGED": 32,
+                "ADMIN_TENANTS_LISTED": 33,
+                "TENANT_STATUS_CHANGED": 34,
+                "ADMIN_USERS_SEARCHED": 35,
+                "ADMIN_USER_VIEWED": 36,
+                "USER_STATUS_CHANGED": 37,
+                "APPLICATION_CREATED": 38,
+                "APPLICATION_UPDATED": 39,
+                "APPLICATION_SECRET_ROTATED": 40,
+                "AUTH_OIDC_LOGIN_SUCCEEDED": 41,
+                "AUTH_OIDC_LOGIN_FAILED": 42,
+                "USER_CREATED_FROM_OIDC": 43,
+                "MEMBERSHIP_CREATED": 45,
+            },
+        ),
+        (AuditResult, {"SUCCESS": 1, "FAILURE": 2}),
+        (
+            AuditActorType,
+            {"USER": 1, "PLATFORM_ADMIN": 2, "APPLICATION": 3, "SYSTEM": 4},
+        ),
+        (
+            AuditTargetType,
+            {
+                "USER": 1,
+                "TENANT": 2,
+                "TENANT_MEMBERSHIP": 3,
+                "APPLICATION": 4,
+                "TENANT_APPLICATION": 5,
+                "TENANT_OIDC_CONFIGURATION": 6,
+                "LOGIN": 7,
+                "IDENTITY": 8,
+                "USER_PROFILE": 12,
+            },
+        ),
     ],
 )
 def test_enum_keys_match_db_model(enum, keys):
@@ -532,4 +590,27 @@ def test_authorization_codes_ddl():
         "ON authorization_codes (expires_at) ; "
         "CREATE INDEX ix_authorization_codes_user_session_id "
         "ON authorization_codes (user_session_id)"
+    )
+
+
+def test_audit_logs_ddl():
+    assert ddl(AuditLog) == (
+        "CREATE TABLE audit_logs ( "
+        "log_id UUID NOT NULL, "
+        "occurred_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, "
+        "action SMALLINT NOT NULL, "
+        "result SMALLINT NOT NULL, "
+        "actor_type SMALLINT NOT NULL, "
+        "actor_id UUID, "
+        "tenant_id UUID, "
+        "target_type SMALLINT, "
+        "target_id VARCHAR(64), "
+        "request_id VARCHAR(128), "
+        "source_ip INET, "
+        "reason VARCHAR(500), "
+        "details JSONB DEFAULT '{}' NOT NULL, "
+        "CONSTRAINT pk_audit_logs PRIMARY KEY (log_id) ) ; "
+        "CREATE INDEX ix_audit_logs_occurred_at ON audit_logs (occurred_at) ; "
+        "CREATE INDEX ix_audit_logs_tenant_id_occurred_at "
+        "ON audit_logs (tenant_id, occurred_at)"
     )

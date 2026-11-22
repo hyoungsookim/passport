@@ -5,6 +5,13 @@ from passport.db.models.application import (
     ApplicationStatus,
     TenantApplication,
 )
+from passport.db.models.audit import (
+    AuditAction,
+    AuditActorType,
+    AuditLog,
+    AuditResult,
+    AuditTargetType,
+)
 from passport.db.models.auth_flow import AuthorizationCode, AuthSession, OidcIntent
 from passport.db.models.tenant import (
     MembershipRemovalReason,
@@ -44,6 +51,11 @@ from passport.db.models.user_session import (
 __all__ = [
     "Application",
     "ApplicationStatus",
+    "AuditAction",
+    "AuditActorType",
+    "AuditLog",
+    "AuditResult",
+    "AuditTargetType",
     "AuthSession",
     "AuthenticationMethod",
     "AuthorizationCode",
