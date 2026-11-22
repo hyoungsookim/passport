@@ -507,7 +507,7 @@ def test_auth_sessions_ddl():
 def test_authorization_codes_ddl():
     assert ddl(AuthorizationCode) == (
         "CREATE TABLE authorization_codes ( "
-        "id UUID NOT NULL, "
+        "authorization_code_id UUID NOT NULL, "
         "code_hash BYTEA NOT NULL, "
         "client_id VARCHAR(32) NOT NULL, "
         "redirect_uri VARCHAR(2048) NOT NULL, "
@@ -518,7 +518,7 @@ def test_authorization_codes_ddl():
         "consumed_at TIMESTAMP WITH TIME ZONE, "
         "refresh_family_id UUID, "
         "created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL, "
-        "CONSTRAINT pk_authorization_codes PRIMARY KEY (id), "
+        "CONSTRAINT pk_authorization_codes PRIMARY KEY (authorization_code_id), "
         "CONSTRAINT uq_authorization_codes_code_hash UNIQUE (code_hash), "
         "CONSTRAINT fk_authorization_codes_user_session_id_user_sessions "
         "FOREIGN KEY(user_session_id) REFERENCES user_sessions (user_session_id) "

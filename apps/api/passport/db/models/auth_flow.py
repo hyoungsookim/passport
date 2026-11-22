@@ -135,7 +135,9 @@ class AuthorizationCode(Base):
 
     __tablename__ = "authorization_codes"
 
-    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid7)
+    authorization_code_id: Mapped[uuid.UUID] = mapped_column(
+        primary_key=True, default=uuid.uuid7
+    )
     # SHA-256 of the code. The raw code is never stored.
     code_hash: Mapped[bytes] = mapped_column(unique=True)
     # Application code that requested the code.

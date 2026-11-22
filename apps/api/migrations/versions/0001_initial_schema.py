@@ -660,7 +660,7 @@ def upgrade() -> None:
     )
     op.create_table(
         "authorization_codes",
-        sa.Column("id", sa.Uuid(), nullable=False),
+        sa.Column("authorization_code_id", sa.Uuid(), nullable=False),
         sa.Column("code_hash", sa.LargeBinary(), nullable=False),
         sa.Column("client_id", sa.String(length=32), nullable=False),
         sa.Column("redirect_uri", sa.String(length=2048), nullable=False),
@@ -694,7 +694,9 @@ def upgrade() -> None:
             name=op.f("fk_authorization_codes_user_session_id_user_sessions"),
             ondelete="CASCADE",
         ),
-        sa.PrimaryKeyConstraint("id", name=op.f("pk_authorization_codes")),
+        sa.PrimaryKeyConstraint(
+            "authorization_code_id", name=op.f("pk_authorization_codes")
+        ),
         sa.UniqueConstraint("code_hash", name=op.f("uq_authorization_codes_code_hash")),
     )
     op.create_index(

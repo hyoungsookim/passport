@@ -17,7 +17,7 @@ Phase 2의 ORM(`passport/db/models/`)과 초기 Alembic 마이그레이션은 �
 | --- | --- |
 | DBMS | PostgreSQL 18, 스키마 `public` |
 | 테이블 이름 | 복수형 snake_case(`users`, `tenant_memberships`). PostgreSQL 예약어 `user`를 피한다 |
-| 기본 키 | `users`·`user_identities`·`tenants`·`tenant_oidc_configurations`·`tenant_memberships`·`user_sessions`·`client_sessions`·`refresh_tokens`·`auth_sessions`·`audit_logs`는 `<엔터티>_id uuid`(`user_id`, `identity_id`, `tenant_id`, `config_id`, `membership_id`, `user_session_id`, `client_session_id`, `refresh_token_id`, `auth_session_id`, `log_id`), 나머지 테이블은 `id uuid`. 값은 애플리케이션에서 `uuid.uuid7()`로 만든다. 시간순이라 인덱스 지역성이 좋고 계약의 ID 예시 형식과 같다. 1:1 확장 테이블은 부모 키를 PK로 쓴다 |
+| 기본 키 | `users`·`user_identities`·`tenants`·`tenant_oidc_configurations`·`tenant_memberships`·`user_sessions`·`client_sessions`·`refresh_tokens`·`auth_sessions`·`authorization_codes`·`audit_logs`는 `<엔터티>_id uuid`(`user_id`, `identity_id`, `tenant_id`, `config_id`, `membership_id`, `user_session_id`, `client_session_id`, `refresh_token_id`, `auth_session_id`, `authorization_code_id`, `log_id`), 나머지 테이블은 `id uuid`. 값은 애플리케이션에서 `uuid.uuid7()`로 만든다. 시간순이라 인덱스 지역성이 좋고 계약의 ID 예시 형식과 같다. 1:1 확장 테이블은 부모 키를 PK로 쓴다 |
 | 시각 | `timestamptz`, UTC. `created_at`·`updated_at`의 기본값은 `now()` |
 | 열거 값 | Python `enum.IntEnum`의 명시적 정수 키(`.value`)를 PostgreSQL `smallint`에 저장한다. CHECK 적용 범위는 1.1절을 따른다 |
 | 이메일 | 소문자 정규화 값만 저장한다(계약 `Email`). `users.user_email`은 애플리케이션에서 정규화·검증한다 |
@@ -533,7 +533,7 @@ OIDC 콜백과 SSO 코드는 해시로 찾고 `UPDATE … SET consumed_at = now(
 
 | 컬럼 | 형식 | NULL | 기본값 | 설명 |
 | --- | --- | --- | --- | --- |
-| `id` | uuid | | UUIDv7 | |
+| `authorization_code_id` | uuid | | UUIDv7 | PK |
 | `code_hash` | bytea | | | UNIQUE |
 | `client_id` | varchar(32) | | | 코드를 요청한 Application `code` |
 | `redirect_uri` | varchar(2048) | | | |
